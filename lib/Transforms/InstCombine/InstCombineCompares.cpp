@@ -1087,22 +1087,33 @@ Instruction *InstCombiner::visitICmpInstWithInstAndIntCst(ICmpInst &ICI,
         // have its sign bit set or if it is an equality comparison. 
         // Extending a relational comparison when we're checking the sign
         // bit would not work.
-        if (Cast->hasOneUse() &&
-            (ICI.isEquality() ||
-             (AndCST->getValue().isNonNegative() && RHSV.isNonNegative()))) {
-          uint32_t BitWidth = 
-            cast<IntegerType>(Cast->getOperand(0)->getType())->getBitWidth();
-          APInt NewCST = AndCST->getValue().zext(BitWidth);
-          APInt NewCI = RHSV.zext(BitWidth);
-          Value *NewAnd = 
+        if (ICI.isEquality() ||
+            (AndCST->getValue().isNonNegative() && RHSV.isNonNegative())) {
+          Value *NewAnd =
             Builder->CreateAnd(Cast->getOperand(0),
-                           ConstantInt::get(ICI.getContext(), NewCST),
-                               LHSI->getName());
+                               ConstantExpr::getZExt(AndCST, Cast->getSrcTy()));
+          NewAnd->takeName(LHSI);
           return new ICmpInst(ICI.getPredicate(), NewAnd,
-                              ConstantInt::get(ICI.getContext(), NewCI));
+                              ConstantExpr::getZExt(RHS, Cast->getSrcTy()));
         }
       }
-      
+
+      // If the LHS is an AND of a zext, and we have an equality compare, we can
+      // shrink the and/compare to the smaller type, eliminating the cast.
+      if (ZExtInst *Cast = dyn_cast<ZExtInst>(LHSI->getOperand(0))) {
+        const IntegerType *Ty = cast<IntegerType>(Cast->getSrcTy());
+        // Make sure we don't compare the upper bits, SimplifyDemandedBits
+        // should fold the icmp to true/false in that case.
+        if (ICI.isEquality() && RHSV.getActiveBits() <= Ty->getBitWidth()) {
+          Value *NewAnd =
+            Builder->CreateAnd(Cast->getOperand(0),
+                               ConstantExpr::getTrunc(AndCST, Ty));
+          NewAnd->takeName(LHSI);
+          return new ICmpInst(ICI.getPredicate(), NewAnd,
+                              ConstantExpr::getTrunc(RHS, Ty));
+        }
+      }
+
       // If this is: (X >> C1) & C2 != C3 (where any shift and any compare
       // could exist), turn it into (X & (C2 << C1)) != (C3 << C1).  This
       // happens a LOT in code produced by the C front-end, for bitfield

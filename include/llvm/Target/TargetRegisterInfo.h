@@ -47,6 +47,7 @@ struct TargetRegisterDesc {
   const unsigned *SubRegs;      // Sub-register set, described above
   const unsigned *SuperRegs;    // Super-register set, described above
   unsigned CostPerUse;          // Extra cost of instructions using register.
+  bool inAllocatableClass;      // Register belongs to an allocatable regclass.
 };
 
 class TargetRegisterClass {
@@ -66,6 +67,7 @@ private:
   const sc_iterator SuperRegClasses;
   const unsigned RegSize, Alignment;    // Size & Alignment of register in bytes
   const int CopyCost;
+  const bool Allocatable;
   const iterator RegsBegin, RegsEnd;
   DenseSet<unsigned> RegSet;
 public:
@@ -76,11 +78,12 @@ public:
                       const TargetRegisterClass * const *supcs,
                       const TargetRegisterClass * const *subregcs,
                       const TargetRegisterClass * const *superregcs,
-                      unsigned RS, unsigned Al, int CC,
+                      unsigned RS, unsigned Al, int CC, bool Allocable,
                       iterator RB, iterator RE)
     : ID(id), Name(name), VTs(vts), SubClasses(subcs), SuperClasses(supcs),
     SubRegClasses(subregcs), SuperRegClasses(superregcs),
-    RegSize(RS), Alignment(Al), CopyCost(CC), RegsBegin(RB), RegsEnd(RE) {
+    RegSize(RS), Alignment(Al), CopyCost(CC), Allocatable(Allocable),
+    RegsBegin(RB), RegsEnd(RE) {
       for (iterator I = RegsBegin, E = RegsEnd; I != E; ++I)
         RegSet.insert(*I);
     }
@@ -268,6 +271,10 @@ public:
   /// this class. A negative number means the register class is very expensive
   /// to copy e.g. status flag register classes.
   int getCopyCost() const { return CopyCost; }
+
+  /// isAllocatable - Return true if this register class may be used to create
+  /// virtual registers.
+  bool isAllocatable() const { return Allocatable; }
 };
 
 
@@ -427,7 +434,7 @@ public:
   /// getSuperRegisters - Return the list of registers that are super-registers
   /// of the specified register, or a null list of there are none. The list
   /// returned is zero terminated and sorted according to super-sub register
-  /// relations. e.g. X86::AL's super-register list is RAX, EAX, AX.
+  /// relations. e.g. X86::AL's super-register list is AX, EAX, RAX.
   ///
   const unsigned *getSuperRegisters(unsigned RegNo) const {
     return get(RegNo).SuperRegs;
@@ -464,19 +471,21 @@ public:
     if (regA == regB)
       return true;
 
+    if (regA > regB)
+      std::swap(regA, regB);
+
     if (isVirtualRegister(regA) || isVirtualRegister(regB))
       return false;
 
     // regA and regB are distinct physical registers. Do they alias?
-    size_t index = (regA + regB * 37) & (AliasesHashSize-1);
-    unsigned ProbeAmt = 0;
-    while (AliasesHash[index*2] != 0 &&
-           AliasesHash[index*2+1] != 0) {
+    size_t index = (regA * 11 + regB * 97) & (AliasesHashSize-1);
+    unsigned ProbeAmt = 1;
+    while (AliasesHash[index*2] != 0 && AliasesHash[index*2+1] != 0) {
       if (AliasesHash[index*2] == regA && AliasesHash[index*2+1] == regB)
         return true;
 
       index = (index + ProbeAmt) & (AliasesHashSize-1);
-      ProbeAmt += 2;
+      ProbeAmt += 1;
     }
 
     return false;
@@ -486,15 +495,14 @@ public:
   ///
   bool isSubRegister(unsigned regA, unsigned regB) const {
     // SubregHash is a simple quadratically probed hash table.
-    size_t index = (regA + regB * 37) & (SubregHashSize-1);
-    unsigned ProbeAmt = 2;
-    while (SubregHash[index*2] != 0 &&
-           SubregHash[index*2+1] != 0) {
+    size_t index = (regA * 11 + regB * 97) & (SubregHashSize-1);
+    unsigned ProbeAmt = 1;
+    while (SubregHash[index*2] != 0 && SubregHash[index*2+1] != 0) {
       if (SubregHash[index*2] == regA && SubregHash[index*2+1] == regB)
         return true;
 
       index = (index + ProbeAmt) & (SubregHashSize-1);
-      ProbeAmt += 2;
+      ProbeAmt += 1;
     }
 
     return false;

@@ -254,7 +254,7 @@ public:
   /// to get to the smaller register. For illegal floating point types, this
   /// returns the integer type to transform to.
   EVT getTypeToTransformTo(LLVMContext &Context, EVT VT) const {
-    return getTypeConversion(Context, VT).second; 
+    return getTypeConversion(Context, VT).second;
   }
 
   /// getTypeToExpandTo - For types supported by the target, this is an
@@ -1211,7 +1211,8 @@ public:
   /// return values described by the Outs array can fit into the return
   /// registers.  If false is returned, an sret-demotion is performed.
   ///
-  virtual bool CanLowerReturn(CallingConv::ID CallConv, bool isVarArg,
+  virtual bool CanLowerReturn(CallingConv::ID CallConv,
+			      MachineFunction &MF, bool isVarArg,
                const SmallVectorImpl<ISD::OutputArg> &Outs,
                LLVMContext &Context) const
   {
@@ -1449,7 +1450,7 @@ public:
 
   /// LowerAsmOperandForConstraint - Lower the specified operand into the Ops
   /// vector.  If it is invalid, don't add anything to Ops.
-  virtual void LowerAsmOperandForConstraint(SDValue Op, char ConstraintLetter,
+  virtual void LowerAsmOperandForConstraint(SDValue Op, std::string &Constraint,
                                             std::vector<SDValue> &Ops,
                                             SelectionDAG &DAG) const;
 
@@ -1852,6 +1853,7 @@ private:
       // If there is no simple vector type with this many elements then there
       // cannot be a larger legal vector type.  Note that this assumes that
       // there are no skipped intermediate vector types in the simple types.
+      if (!EltVT.isSimple()) break;
       MVT LargerVector = MVT::getVectorVT(EltVT.getSimpleVT(), NumElts);
       if (LargerVector == MVT()) break;
 

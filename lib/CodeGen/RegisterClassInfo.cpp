@@ -14,9 +14,13 @@
 //
 //===----------------------------------------------------------------------===//
 
+#define DEBUG_TYPE "regalloc"
 #include "RegisterClassInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/Target/TargetMachine.h"
+
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
@@ -39,7 +43,8 @@ void RegisterClassInfo::runOnMachineFunction(const MachineFunction &mf) {
   if (Update || CSR != CalleeSaved) {
     // Build a CSRNum map. Every CSR alias gets an entry pointing to the last
     // overlapping CSR.
-    CSRNum.reset(new uint8_t[TRI->getNumRegs()]);
+    CSRNum.clear();
+    CSRNum.resize(TRI->getNumRegs(), 0);
     for (unsigned N = 0; unsigned Reg = CSR[N]; ++N)
       for (const unsigned *AS = TRI->getOverlaps(Reg);
            unsigned Alias = *AS; ++AS)
@@ -72,7 +77,7 @@ void RegisterClassInfo::compute(const TargetRegisterClass *RC) const {
     RCI.Order.reset(new unsigned[NumRegs]);
 
   unsigned N = 0;
-  SmallVector<std::pair<unsigned, unsigned>, 8> CSRAlias;
+  SmallVector<unsigned, 16> CSRAlias;
 
   // FIXME: Once targets reserve registers instead of removing them from the
   // allocation order, we can simply use begin/end here.
@@ -84,21 +89,24 @@ void RegisterClassInfo::compute(const TargetRegisterClass *RC) const {
     // Remove reserved registers from the allocation order.
     if (Reserved.test(PhysReg))
       continue;
-    if (unsigned CSR = CSRNum[PhysReg])
+    if (CSRNum[PhysReg])
       // PhysReg aliases a CSR, save it for later.
-      CSRAlias.push_back(std::make_pair(CSR, PhysReg));
+      CSRAlias.push_back(PhysReg);
     else
       RCI.Order[N++] = PhysReg;
   }
   RCI.NumRegs = N + CSRAlias.size();
   assert (RCI.NumRegs <= NumRegs && "Allocation order larger than regclass");
 
-  // Sort CSR aliases acording to the CSR ordering.
-  if (CSRAlias.size() >= 2)
-    array_pod_sort(CSRAlias.begin(), CSRAlias.end());
+  // CSR aliases go after the volatile registers, preserve the target's order.
+  std::copy(CSRAlias.begin(), CSRAlias.end(), &RCI.Order[N]);
 
-  for (unsigned i = 0, e = CSRAlias.size(); i != e; ++i)
-      RCI.Order[N++] = CSRAlias[i].second;
+  DEBUG({
+    dbgs() << "AllocationOrder(" << RC->getName() << ") = [";
+    for (unsigned I = 0; I != RCI.NumRegs; ++I)
+      dbgs() << ' ' << PrintReg(RCI.Order[I], TRI);
+    dbgs() << " ]\n";
+  });
 
   // RCI is now up-to-date.
   RCI.Tag = Tag;

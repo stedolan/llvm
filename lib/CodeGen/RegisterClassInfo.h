@@ -51,7 +51,7 @@ class RegisterClassInfo {
   const unsigned *CalleeSaved;
 
   // Map register number to CalleeSaved index + 1;
-  OwningArrayPtr<uint8_t> CSRNum;
+  SmallVector<uint8_t, 4> CSRNum;
 
   // Reserved registers in the current MF.
   BitVector Reserved;
@@ -94,6 +94,25 @@ public:
     if (unsigned N = CSRNum[PhysReg])
       return CalleeSaved[N-1];
     return 0;
+  }
+
+  /// isReserved - Returns true when PhysReg is a reserved register.
+  ///
+  /// Reserved registers may belong to an allocatable register class, but the
+  /// target has explicitly requested that they are not used.
+  ///
+  bool isReserved(unsigned PhysReg) const {
+    return Reserved.test(PhysReg);
+  }
+
+  /// isAllocatable - Returns true when PhysReg belongs to an allocatable
+  /// register class and it hasn't been reserved.
+  ///
+  /// Allocatable registers may show up in the allocation order of some virtual
+  /// register, so a register allocator needs to track its liveness and
+  /// availability.
+  bool isAllocatable(unsigned PhysReg) const {
+    return TRI->get(PhysReg).inAllocatableClass && !isReserved(PhysReg);
   }
 };
 } // end namespace llvm

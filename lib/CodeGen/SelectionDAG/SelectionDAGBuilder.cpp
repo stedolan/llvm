@@ -280,18 +280,35 @@ static SDValue getCopyFromPartsVector(SelectionDAG &DAG, DebugLoc DL,
     }
 
     // Vector/Vector bitcast.
-    return DAG.getNode(ISD::BITCAST, DL, ValueVT, Val);
+    if (ValueVT.getSizeInBits() == PartVT.getSizeInBits())
+      return DAG.getNode(ISD::BITCAST, DL, ValueVT, Val);
+
+    assert(PartVT.getVectorNumElements() == ValueVT.getVectorNumElements() &&
+      "Cannot handle this kind of promotion");
+    // Promoted vector extract
+    bool Smaller = ValueVT.bitsLE(PartVT);
+    return DAG.getNode((Smaller ? ISD::TRUNCATE : ISD::ANY_EXTEND),
+                       DL, ValueVT, Val);
+
   }
-  
+
   // Trivial bitcast if the types are the same size and the destination
   // vector type is legal.
   if (PartVT.getSizeInBits() == ValueVT.getSizeInBits() &&
       TLI.isTypeLegal(ValueVT))
     return DAG.getNode(ISD::BITCAST, DL, ValueVT, Val);
 
-  assert(ValueVT.getVectorElementType() == PartVT &&
-         ValueVT.getVectorNumElements() == 1 &&
+  // Handle cases such as i8 -> <1 x i1>
+  assert(ValueVT.getVectorNumElements() == 1 &&
          "Only trivial scalar-to-vector conversions should get here!");
+
+  if (ValueVT.getVectorNumElements() == 1 &&
+      ValueVT.getVectorElementType() != PartVT) {
+    bool Smaller = ValueVT.bitsLE(PartVT);
+    Val = DAG.getNode((Smaller ? ISD::TRUNCATE : ISD::ANY_EXTEND),
+                       DL, ValueVT.getScalarType(), Val);
+  }
+
   return DAG.getNode(ISD::BUILD_VECTOR, DL, ValueVT, Val);
 }
 
@@ -432,7 +449,7 @@ static void getCopyToPartsVector(SelectionDAG &DAG, DebugLoc DL,
       // Bitconvert vector->vector case.
       Val = DAG.getNode(ISD::BITCAST, DL, PartVT, Val);
     } else if (PartVT.isVector() &&
-               PartVT.getVectorElementType() == ValueVT.getVectorElementType()&&
+               PartVT.getVectorElementType() == ValueVT.getVectorElementType() &&
                PartVT.getVectorNumElements() > ValueVT.getVectorNumElements()) {
       EVT ElementVT = PartVT.getVectorElementType();
       // Vector widening case, e.g. <2 x float> -> <4 x float>.  Shuffle in
@@ -452,13 +469,33 @@ static void getCopyToPartsVector(SelectionDAG &DAG, DebugLoc DL,
 
       //SDValue UndefElts = DAG.getUNDEF(VectorTy);
       //Val = DAG.getNode(ISD::CONCAT_VECTORS, DL, PartVT, Val, UndefElts);
-    } else {
+    } else if (PartVT.isVector() &&
+               PartVT.getVectorElementType().bitsGE(
+                 ValueVT.getVectorElementType()) &&
+               PartVT.getVectorNumElements() == ValueVT.getVectorNumElements()) {
+
+      // Promoted vector extract
+      unsigned NumElts = ValueVT.getVectorNumElements();
+      SmallVector<SDValue, 8> NewOps;
+      for (unsigned i = 0; i < NumElts; ++i) {
+        SDValue Ext = DAG.getNode(ISD::EXTRACT_VECTOR_ELT, DL,
+                       ValueVT.getScalarType(), Val ,DAG.getIntPtrConstant(i));
+        SDValue Cast = DAG.getNode(ISD::ANY_EXTEND,
+                       DL, PartVT.getScalarType(), Ext);
+        NewOps.push_back(Cast);
+      }
+      Val = DAG.getNode(ISD::BUILD_VECTOR, DL, PartVT,
+                        &NewOps[0], NewOps.size());
+    } else{
       // Vector -> scalar conversion.
-      assert(ValueVT.getVectorElementType() == PartVT &&
-             ValueVT.getVectorNumElements() == 1 &&
+      assert(ValueVT.getVectorNumElements() == 1 &&
              "Only trivial vector-to-scalar conversions should get here!");
       Val = DAG.getNode(ISD::EXTRACT_VECTOR_ELT, DL,
                         PartVT, Val, DAG.getIntPtrConstant(0));
+
+      bool Smaller = ValueVT.bitsLE(PartVT);
+      Val = DAG.getNode((Smaller ? ISD::TRUNCATE : ISD::ANY_EXTEND),
+                         DL, PartVT, Val);
     }
 
     Parts[0] = Val;
@@ -4858,7 +4895,9 @@ void SelectionDAGBuilder::LowerCallTo(ImmutableCallSite CS, SDValue Callee,
                 Outs, TLI, &Offsets);
 
   bool CanLowerReturn = TLI.CanLowerReturn(CS.getCallingConv(),
-                        FTy->isVarArg(), Outs, FTy->getContext());
+					   DAG.getMachineFunction(),
+					   FTy->isVarArg(), Outs,
+					   FTy->getContext());
 
   SDValue DemoteStackSlot;
   int DemoteStackIdx = -100;
@@ -5747,6 +5786,10 @@ void SelectionDAGBuilder::visitInlineAsm(ImmutableCallSite CS) {
       // Memory operands really want the address of the value.  If we don't have
       // an indirect input, put it in the constpool if we can, otherwise spill
       // it to a stack slot.
+      // TODO: This isn't quite right. We need to handle these according to
+      // the addressing mode that the constraint wants. Also, this may take
+      // an additional register for the computation and we don't want that
+      // either.
 
       // If the operand is a float, integer, or vector constant, spill to a
       // constant pool entry to get its address.
@@ -5948,7 +5991,7 @@ void SelectionDAGBuilder::visitInlineAsm(ImmutableCallSite CS) {
 
       if (OpInfo.ConstraintType == TargetLowering::C_Other) {
         std::vector<SDValue> Ops;
-        TLI.LowerAsmOperandForConstraint(InOperandVal, OpInfo.ConstraintCode[0],
+        TLI.LowerAsmOperandForConstraint(InOperandVal, OpInfo.ConstraintCode,
                                          Ops, DAG);
         if (Ops.empty())
           report_fatal_error("Invalid operand for inline asm constraint '" +

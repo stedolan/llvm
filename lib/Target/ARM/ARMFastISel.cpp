@@ -443,14 +443,14 @@ unsigned ARMFastISel::FastEmitInst_ii(unsigned MachineInstOpcode,
                                       uint64_t Imm1, uint64_t Imm2) {
   unsigned ResultReg = createResultReg(RC);
   const TargetInstrDesc &II = TII.get(MachineInstOpcode);
-  
+
   if (II.getNumDefs() >= 1)
     AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II, ResultReg)
                     .addImm(Imm1).addImm(Imm2));
   else {
     AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, II)
                     .addImm(Imm1).addImm(Imm2));
-    AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, 
+    AddOptionalDefs(BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL,
                             TII.get(TargetOpcode::COPY),
                             ResultReg)
                     .addReg(II.ImplicitDefs[0]));
@@ -577,9 +577,6 @@ unsigned ARMFastISel::ARMMaterializeGV(const GlobalValue *GV, EVT VT) {
 
   Reloc::Model RelocM = TM.getRelocationModel();
 
-  // TODO: No external globals for now.
-  if (Subtarget->GVIsIndirectSymbol(GV, RelocM)) return 0;
-
   // TODO: Need more magic for ARM PIC.
   if (!isThumb && (RelocM == Reloc::PIC_)) return 0;
 
@@ -614,6 +611,23 @@ unsigned ARMFastISel::ARMMaterializeGV(const GlobalValue *GV, EVT VT) {
           .addImm(0);
   }
   AddOptionalDefs(MIB);
+
+  if (Subtarget->GVIsIndirectSymbol(GV, RelocM)) {
+    unsigned NewDestReg = createResultReg(TLI.getRegClassFor(VT));
+    if (isThumb)
+      MIB = BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, TII.get(ARM::t2LDRi12),
+                    NewDestReg)
+            .addReg(DestReg)
+            .addImm(0);
+    else
+      MIB = BuildMI(*FuncInfo.MBB, FuncInfo.InsertPt, DL, TII.get(ARM::LDRi12),
+                    NewDestReg)
+            .addReg(DestReg)
+            .addImm(0);
+    DestReg = NewDestReg;
+    AddOptionalDefs(MIB);
+  }
+
   return DestReg;
 }
 
@@ -1528,7 +1542,7 @@ bool ARMFastISel::ProcessCallArgs(SmallVectorImpl<Value*> &Args,
                                   CallingConv::ID CC,
                                   unsigned &NumBytes) {
   SmallVector<CCValAssign, 16> ArgLocs;
-  CCState CCInfo(CC, false, TM, ArgLocs, *Context);
+  CCState CCInfo(CC, false, *FuncInfo.MF, TM, ArgLocs, *Context);
   CCInfo.AnalyzeCallOperands(ArgVTs, ArgFlags, CCAssignFnForCall(CC, false));
 
   // Get a count of how many bytes are to be pushed on the stack.
@@ -1641,7 +1655,7 @@ bool ARMFastISel::FinishCall(MVT RetVT, SmallVectorImpl<unsigned> &UsedRegs,
   // Now the return value.
   if (RetVT != MVT::isVoid) {
     SmallVector<CCValAssign, 16> RVLocs;
-    CCState CCInfo(CC, false, TM, RVLocs, *Context);
+    CCState CCInfo(CC, false, *FuncInfo.MF, TM, RVLocs, *Context);
     CCInfo.AnalyzeCallResult(RetVT, CCAssignFnForCall(CC, true));
 
     // Copy all of the result registers out of their specified physreg.
@@ -1697,7 +1711,7 @@ bool ARMFastISel::SelectRet(const Instruction *I) {
 
     // Analyze operands of the call, assigning locations to each operand.
     SmallVector<CCValAssign, 16> ValLocs;
-    CCState CCInfo(CC, F.isVarArg(), TM, ValLocs, I->getContext());
+    CCState CCInfo(CC, F.isVarArg(), *FuncInfo.MF, TM, ValLocs, I->getContext());
     CCInfo.AnalyzeReturn(Outs, CCAssignFnForCall(CC, true /* is Ret */));
 
     const Value *RV = Ret->getOperand(0);
@@ -1976,7 +1990,7 @@ bool ARMFastISel::SelectIntCast(const Instruction *I) {
     // any code.
     UpdateValueMap(I, SrcReg);
     return true;
-  } 
+  }
   if (DestVT != MVT::i32 && DestVT != MVT::i16 && DestVT != MVT::i8)
     return false;
 

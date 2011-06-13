@@ -15,23 +15,68 @@
 #ifndef CODEGEN_REGISTERS_H
 #define CODEGEN_REGISTERS_H
 
+#include "Record.h"
 #include "llvm/CodeGen/ValueTypes.h"
 #include "llvm/ADT/DenseMap.h"
-#include <string>
-#include <vector>
-#include <set>
+#include "llvm/ADT/SetVector.h"
 #include <cstdlib>
+#include <map>
+#include <string>
+#include <set>
+#include <vector>
 
 namespace llvm {
-  class Record;
+  class CodeGenRegBank;
 
   /// CodeGenRegister - Represents a register definition.
   struct CodeGenRegister {
     Record *TheDef;
-    const std::string &getName() const;
     unsigned EnumValue;
     unsigned CostPerUse;
-    CodeGenRegister(Record *R);
+
+    // Map SubRegIndex -> Register.
+    typedef std::map<Record*, CodeGenRegister*, LessRecord> SubRegMap;
+
+    CodeGenRegister(Record *R, unsigned Enum);
+
+    const std::string &getName() const;
+
+    // Get a map of sub-registers computed lazily.
+    // This includes unique entries for all sub-sub-registers.
+    const SubRegMap &getSubRegs(CodeGenRegBank&);
+
+    const SubRegMap &getSubRegs() const {
+      assert(SubRegsComplete && "Must precompute sub-registers");
+      return SubRegs;
+    }
+
+    // Add sub-registers to OSet following a pre-order defined by the .td file.
+    void addSubRegsPreOrder(SetVector<CodeGenRegister*> &OSet) const;
+
+    // List of super-registers in topological order, small to large.
+    typedef std::vector<CodeGenRegister*> SuperRegList;
+
+    // Get the list of super-registers.
+    // This is only valid after computeDerivedInfo has visited all registers.
+    const SuperRegList &getSuperRegs() const {
+      assert(SubRegsComplete && "Must precompute sub-registers");
+      return SuperRegs;
+    }
+
+    // Order CodeGenRegister pointers by EnumValue.
+    struct Less {
+      bool operator()(const CodeGenRegister *A, const CodeGenRegister *B) {
+        return A->EnumValue < B->EnumValue;
+      }
+    };
+
+    // Canonically ordered set.
+    typedef std::set<CodeGenRegister*, Less> Set;
+
+  private:
+    bool SubRegsComplete;
+    SubRegMap SubRegs;
+    SuperRegList SuperRegs;
   };
 
 
@@ -43,6 +88,7 @@ namespace llvm {
     unsigned SpillSize;
     unsigned SpillAlignment;
     int CopyCost;
+    bool Allocatable;
     // Map SubRegIndex -> RegisterClass
     DenseMap<Record*,Record*> SubRegClasses;
     std::string MethodProtos, MethodBodies;
@@ -96,6 +142,56 @@ namespace llvm {
     }
 
     CodeGenRegisterClass(Record *R);
+  };
+
+  // CodeGenRegBank - Represent a target's registers and the relations between
+  // them.
+  class CodeGenRegBank {
+    RecordKeeper &Records;
+    std::vector<Record*> SubRegIndices;
+    unsigned NumNamedIndices;
+    std::vector<CodeGenRegister> Registers;
+    DenseMap<Record*, CodeGenRegister*> Def2Reg;
+
+    // Composite SubRegIndex instances.
+    // Map (SubRegIndex, SubRegIndex) -> SubRegIndex.
+    typedef DenseMap<std::pair<Record*, Record*>, Record*> CompositeMap;
+    CompositeMap Composite;
+
+    // Populate the Composite map from sub-register relationships.
+    void computeComposites();
+
+  public:
+    CodeGenRegBank(RecordKeeper&);
+
+    // Sub-register indices. The first NumNamedIndices are defined by the user
+    // in the .td files. The rest are synthesized such that all sub-registers
+    // have a unique name.
+    const std::vector<Record*> &getSubRegIndices() { return SubRegIndices; }
+    unsigned getNumNamedIndices() { return NumNamedIndices; }
+
+    // Map a SubRegIndex Record to its enum value.
+    unsigned getSubRegIndexNo(Record *idx);
+
+    // Find or create a sub-register index representing the A+B composition.
+    Record *getCompositeSubRegIndex(Record *A, Record *B, bool create = false);
+
+    const std::vector<CodeGenRegister> &getRegisters() { return Registers; }
+
+    // Find a register from its Record def.
+    CodeGenRegister *getReg(Record*);
+
+    // Computed derived records such as missing sub-register indices.
+    void computeDerivedInfo();
+
+    // Compute full overlap sets for every register. These sets include the
+    // rarely used aliases that are neither sub nor super-registers.
+    //
+    // Map[R1].count(R2) is reflexive and symmetric, but not transitive.
+    //
+    // If R1 is a sub-register of R2, Map[R1] is a subset of Map[R2].
+    void computeOverlaps(std::map<const CodeGenRegister*,
+                                  CodeGenRegister::Set> &Map);
   };
 }
 

@@ -342,7 +342,8 @@ void ConvertToScalarInfo::MergeInType(const Type *In, uint64_t Offset,
     // If we're accessing something that could be an element of a vector, see
     // if the implied vector agrees with what we already have and if Offset is
     // compatible with it.
-    if (Offset % EltSize == 0 && AllocaSize % EltSize == 0) {
+    if (Offset % EltSize == 0 && AllocaSize % EltSize == 0 &&
+        (!VectorTy || Offset * 8 < VectorTy->getPrimitiveSizeInBits())) {
       if (!VectorTy) {
         VectorTy = VectorType::get(In, AllocaSize/EltSize);
         return;
@@ -742,8 +743,9 @@ ConvertScalar_ExtractValue(Value *FromVal, const Type *ToType,
   // If the result alloca is a vector type, this is either an element
   // access or a bitcast to another vector type of the same size.
   if (const VectorType *VTy = dyn_cast<VectorType>(FromType)) {
+    unsigned FromTypeSize = TD.getTypeAllocSize(FromType);
     unsigned ToTypeSize = TD.getTypeAllocSize(ToType);
-    if (ToTypeSize == AllocaSize) {
+    if (FromTypeSize == ToTypeSize) {
       // If the two types have the same primitive size, use a bit cast.
       // Otherwise, it is two vectors with the same element type that has
       // the same allocation size but different number of elements so use
@@ -755,13 +757,13 @@ ConvertScalar_ExtractValue(Value *FromVal, const Type *ToType,
         return CreateShuffleVectorCast(FromVal, ToType, Builder);
     }
 
-    if (isPowerOf2_64(AllocaSize / ToTypeSize)) {
+    if (isPowerOf2_64(FromTypeSize / ToTypeSize)) {
       assert(!(ToType->isVectorTy() && Offset != 0) && "Can't extract a value "
              "of a smaller vector type at a nonzero offset.");
 
       const Type *CastElementTy = getScaledElementType(FromType, ToType,
                                                        ToTypeSize * 8);
-      unsigned NumCastVectorElements = AllocaSize / ToTypeSize;
+      unsigned NumCastVectorElements = FromTypeSize / ToTypeSize;
 
       LLVMContext &Context = FromVal->getContext();
       const Type *CastTy = VectorType::get(CastElementTy,
@@ -1840,9 +1842,10 @@ void SROA::RewriteForScalarRepl(Instruction *I, AllocaInst *AI, uint64_t Offset,
         //   %insert = insertvalue { i32, i32 } %insert.0, i32 %load.1, 1
         // (Also works for arrays instead of structs)
         Value *Insert = UndefValue::get(LIType);
+        IRBuilder<> Builder(LI);
         for (unsigned i = 0, e = NewElts.size(); i != e; ++i) {
-          Value *Load = new LoadInst(NewElts[i], "load", LI);
-          Insert = InsertValueInst::Create(Insert, Load, i, "insert", LI);
+          Value *Load = Builder.CreateLoad(NewElts[i], "load");
+          Insert = Builder.CreateInsertValue(Insert, Load, i, "insert");
         }
         LI->replaceAllUsesWith(Insert);
         DeadInsts.push_back(LI);
@@ -1867,9 +1870,10 @@ void SROA::RewriteForScalarRepl(Instruction *I, AllocaInst *AI, uint64_t Offset,
         //   %val.1 = extractvalue { i32, i32 } %val, 1
         //   store i32 %val.1, i32* %alloc.1
         // (Also works for arrays instead of structs)
+        IRBuilder<> Builder(SI);
         for (unsigned i = 0, e = NewElts.size(); i != e; ++i) {
-          Value *Extract = ExtractValueInst::Create(Val, i, Val->getName(), SI);
-          new StoreInst(Extract, NewElts[i], SI);
+          Value *Extract = Builder.CreateExtractValue(Val, i, Val->getName());
+          Builder.CreateStore(Extract, NewElts[i]);
         }
         DeadInsts.push_back(SI);
       } else if (SIType->isIntegerTy() &&

@@ -37,17 +37,6 @@ using namespace llvm;
 #undef  DEBUG_TYPE
 #define DEBUG_TYPE "reloc-info"
 
-// FIXME: This switch must be removed. Since GNU as does not
-// need a command line switch for doing its wierd thing with PIC,
-// LLVM should not need it either.
-// --
-// Emulate the wierd behavior of GNU-as for relocation types
-namespace llvm {
-cl::opt<bool>
-ForceARMElfPIC("arm-elf-force-pic", cl::Hidden, cl::init(false),
-               cl::desc("Force ELF emitter to emit PIC style relocations"));
-}
-
 bool ELFObjectWriter::isFixupKindPCRel(const MCAssembler &Asm, unsigned Kind) {
   const MCFixupKindInfo &FKI =
     Asm.getBackend().getFixupKindInfo((MCFixupKind) Kind);
@@ -62,6 +51,7 @@ bool ELFObjectWriter::RelocNeedsGOT(MCSymbolRefExpr::VariantKind Variant) {
   case MCSymbolRefExpr::VK_GOT:
   case MCSymbolRefExpr::VK_PLT:
   case MCSymbolRefExpr::VK_GOTPCREL:
+  case MCSymbolRefExpr::VK_GOTOFF:
   case MCSymbolRefExpr::VK_TPOFF:
   case MCSymbolRefExpr::VK_TLSGD:
   case MCSymbolRefExpr::VK_GOTTPOFF:
@@ -556,6 +546,7 @@ void ELFObjectWriter::ComputeSymbolTable(MCAssembler &Asm,
                                          RevGroupMapTy RevGroupMap,
                                          unsigned NumRegularSections) {
   // FIXME: Is this the correct place to do this?
+  // FIXME: Why is an undefined reference to _GLOBAL_OFFSET_TABLE_ needed?
   if (NeedsGOT) {
     llvm::StringRef Name = "_GLOBAL_OFFSET_TABLE_";
     MCSymbol *Sym = Asm.getContext().GetOrCreateSymbol(Name);
@@ -1319,7 +1310,7 @@ const MCSymbol *ARMELFObjectWriter::ExplicitRelSym(const MCAssembler &Asm,
         << Symbol.isVariable() << "/" << Symbol.isTemporary()
         << " Counts:" << PCRelCount << "/" << NonPCRelCount << "\n");
 
-  if (IsPCRel || ForceARMElfPIC) { ++PCRelCount;
+  if (IsPCRel) { ++PCRelCount;
     switch (RelocType) {
     default:
       // Most relocation types are emitted as explicit symbols
@@ -1719,6 +1710,9 @@ unsigned X86ELFObjectWriter::GetRelocType(const MCValue &Target,
           break;
         case MCSymbolRefExpr::VK_DTPOFF:
           Type = ELF::R_386_TLS_LDO_32;
+          break;
+        case MCSymbolRefExpr::VK_GOTTPOFF:
+          Type = ELF::R_386_TLS_IE_32;
           break;
         }
         break;

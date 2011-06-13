@@ -673,10 +673,16 @@ static unsigned getVectorTypeBreakdownMVT(MVT VT, MVT &IntermediateVT,
     NewVT = EltTy;
   IntermediateVT = NewVT;
 
+  unsigned NewVTSize = NewVT.getSizeInBits();
+
+  // Convert sizes such as i33 to i64.
+  if (!isPowerOf2_32(NewVTSize))
+    NewVTSize = NextPowerOf2(NewVTSize);
+
   EVT DestVT = TLI->getRegisterType(NewVT);
   RegisterVT = DestVT;
   if (EVT(DestVT).bitsLT(NewVT))    // Value is expanded, e.g. i64 -> i16.
-    return NumVectorRegs*(NewVT.getSizeInBits()/DestVT.getSizeInBits());
+    return NumVectorRegs*(NewVTSize/DestVT.getSizeInBits());
 
   // Otherwise, promotion or legal types use the same number of registers as
   // the vector decimated to the appropriate level.
@@ -821,26 +827,32 @@ void TargetLowering::computeRegisterProperties() {
     unsigned NElts = VT.getVectorNumElements();
     if (NElts != 1) {
       bool IsLegalWiderType = false;
+      // If we allow the promotion of vector elements using a flag,
+      // then return TypePromoteInteger on vector elements.
+      // First try to promote the elements of integer vectors. If no legal
+      // promotion was found, fallback to the widen-vector method.
+      if (mayPromoteElements)
       for (unsigned nVT = i+1; nVT <= MVT::LAST_VECTOR_VALUETYPE; ++nVT) {
         EVT SVT = (MVT::SimpleValueType)nVT;
-
-        // If we allow the promotion of vector elements using a flag,
-        // then return TypePromoteInteger on vector elements.
-        if (mayPromoteElements) {
-          // Promote vectors of integers to vectors with the same number
-          // of elements, with a wider element type.
-          if (SVT.getVectorElementType().getSizeInBits() > EltVT.getSizeInBits()
-              && SVT.getVectorNumElements() == NElts &&
-              isTypeLegal(SVT) && SVT.getScalarType().isInteger()) {
-            TransformToType[i] = SVT;
-            RegisterTypeForVT[i] = SVT;
-            NumRegistersForVT[i] = 1;
-            ValueTypeActions.setTypeAction(VT, TypePromoteInteger);
-            IsLegalWiderType = true;
-            break;
-          }
+        // Promote vectors of integers to vectors with the same number
+        // of elements, with a wider element type.
+        if (SVT.getVectorElementType().getSizeInBits() > EltVT.getSizeInBits()
+            && SVT.getVectorNumElements() == NElts &&
+            isTypeLegal(SVT) && SVT.getScalarType().isInteger()) {
+          TransformToType[i] = SVT;
+          RegisterTypeForVT[i] = SVT;
+          NumRegistersForVT[i] = 1;
+          ValueTypeActions.setTypeAction(VT, TypePromoteInteger);
+          IsLegalWiderType = true;
+          break;
         }
+      }
 
+      if (IsLegalWiderType) continue;
+
+      // Try to widen the vector.
+      for (unsigned nVT = i+1; nVT <= MVT::LAST_VECTOR_VALUETYPE; ++nVT) {
+        EVT SVT = (MVT::SimpleValueType)nVT;
         if (SVT.getVectorElementType() == EltVT &&
             SVT.getVectorNumElements() > NElts &&
             isTypeLegal(SVT)) {
@@ -959,8 +971,14 @@ unsigned TargetLowering::getVectorTypeBreakdown(LLVMContext &Context, EVT VT,
 
   EVT DestVT = getRegisterType(Context, NewVT);
   RegisterVT = DestVT;
+  unsigned NewVTSize = NewVT.getSizeInBits();
+
+  // Convert sizes such as i33 to i64.
+  if (!isPowerOf2_32(NewVTSize))
+    NewVTSize = NextPowerOf2(NewVTSize);
+
   if (DestVT.bitsLT(NewVT))   // Value is expanded, e.g. i64 -> i16.
-    return NumVectorRegs*(NewVT.getSizeInBits()/DestVT.getSizeInBits());
+    return NumVectorRegs*(NewVTSize/DestVT.getSizeInBits());
 
   // Otherwise, promotion or legal types use the same number of registers as
   // the vector decimated to the appropriate level.
@@ -1754,19 +1772,20 @@ bool TargetLowering::SimplifyDemandedBits(SDValue Op,
     break;
   }
   case ISD::BITCAST:
-    // If this is an FP->Int bitcast and if the sign bit is the only thing that
-    // is demanded, turn this into a FGETSIGN.
-    if (NewMask == APInt::getSignBit(Op.getValueType().getSizeInBits()) &&
-        Op.getOperand(0).getValueType().isFloatingPoint() &&
-        !Op.getOperand(0).getValueType().isVector()) {
+    // If this is an FP->Int bitcast and if the sign bit is the only
+    // thing demanded, turn this into a FGETSIGN.
+    if (!Op.getOperand(0).getValueType().isVector() &&
+        NewMask == APInt::getSignBit(Op.getValueType().getSizeInBits()) &&
+        Op.getOperand(0).getValueType().isFloatingPoint()) {
       bool OpVTLegal = isOperationLegalOrCustom(ISD::FGETSIGN, Op.getValueType());
       bool i32Legal  = isOperationLegalOrCustom(ISD::FGETSIGN, MVT::i32);
-      if (OpVTLegal || i32Legal) {
+      if ((OpVTLegal || i32Legal) && Op.getValueType().isSimple()) {
         EVT Ty = OpVTLegal ? Op.getValueType() : MVT::i32;
         // Make a FGETSIGN + SHL to move the sign bit into the appropriate
         // place.  We expect the SHL to be eliminated by other optimizations.
         SDValue Sign = TLO.DAG.getNode(ISD::FGETSIGN, dl, Ty, Op.getOperand(0));
-        if (!OpVTLegal)
+        unsigned OpVTSizeInBits = Op.getValueType().getSizeInBits();
+        if (!OpVTLegal && OpVTSizeInBits > 32)
           Sign = TLO.DAG.getNode(ISD::ZERO_EXTEND, dl, Op.getValueType(), Sign);
         unsigned ShVal = Op.getValueType().getSizeInBits()-1;
         SDValue ShAmt = TLO.DAG.getConstant(ShVal, Op.getValueType());
@@ -2651,9 +2670,13 @@ const char *TargetLowering::LowerXConstraint(EVT ConstraintVT) const{
 /// LowerAsmOperandForConstraint - Lower the specified operand into the Ops
 /// vector.  If it is invalid, don't add anything to Ops.
 void TargetLowering::LowerAsmOperandForConstraint(SDValue Op,
-                                                  char ConstraintLetter,
+                                                  std::string &Constraint,
                                                   std::vector<SDValue> &Ops,
                                                   SelectionDAG &DAG) const {
+  
+  if (Constraint.length() > 1) return;
+  
+  char ConstraintLetter = Constraint[0];
   switch (ConstraintLetter) {
   default: break;
   case 'X':     // Allows any operand; labels (basic block) use this.
@@ -3092,7 +3115,7 @@ static void ChooseConstraint(TargetLowering::AsmOperandInfo &OpInfo,
       assert(OpInfo.Codes[i].size() == 1 &&
              "Unhandled multi-letter 'other' constraint");
       std::vector<SDValue> ResultOps;
-      TLI.LowerAsmOperandForConstraint(Op, OpInfo.Codes[i][0],
+      TLI.LowerAsmOperandForConstraint(Op, OpInfo.Codes[i],
                                        ResultOps, *DAG);
       if (!ResultOps.empty()) {
         BestType = CType;
