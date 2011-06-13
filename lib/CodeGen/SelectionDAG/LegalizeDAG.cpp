@@ -832,6 +832,7 @@ SDValue SelectionDAGLegalize::LegalizeOp(SDValue Op) {
   case ISD::INTRINSIC_VOID:
   case ISD::VAARG:
   case ISD::STACKSAVE:
+  case ISD::NEWSTACK:
     Action = TLI.getOperationAction(Node->getOpcode(), MVT::Other);
     break;
   case ISD::SINT_TO_FP:

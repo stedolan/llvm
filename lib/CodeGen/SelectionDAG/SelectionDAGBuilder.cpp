@@ -4665,6 +4665,18 @@ SelectionDAGBuilder::visitIntrinsicCall(const CallInst &I, unsigned Intrinsic) {
     DAG.setRoot(Res);
     return 0;
   }
+  case Intrinsic::newstack: {
+    SDValue Op = getRoot();
+    Res = DAG.getNode(ISD::NEWSTACK, dl, 
+                      DAG.getVTList(TLI.getPointerTy(), MVT::Other), 
+                      Op,
+                      getValue(I.getArgOperand(0)),
+                      getValue(I.getArgOperand(1)),
+                      getValue(I.getArgOperand(2)));
+    setValue(&I, Res);
+    DAG.setRoot(Res.getValue(1));
+    return 0;
+  }
   case Intrinsic::objectsize: {
     // If we don't know by now, we're never going to know.
     ConstantInt *CI = dyn_cast<ConstantInt>(I.getArgOperand(1));

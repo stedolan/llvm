@@ -91,6 +91,7 @@ def VAARG_64 : I<0, Pseudo,
                  (ins i8mem:$ap, i32imm:$size, i8imm:$mode, i32imm:$align),
                  "#VAARG_64 $dst, $ap, $size, $mode, $align",
                  [(set GR64:$dst,
+
                     (X86vaarg64 addr:$ap, imm:$size, imm:$mode, imm:$align)),
                   (implicit EFLAGS)]>;
 
@@ -109,6 +110,31 @@ let Defs = [EAX, ESP, EFLAGS], Uses = [ESP] in
 }
 
 
+// Stack swapping (FIXME docs)
+
+let isCall = 1, isCodeGenOnly = 1 in {
+  let // All registers are clobbered except for RSP
+    Defs = [RAX, RBX, RCX, RDX, RSI, RDI, RBP,
+            R8,  R9,  R10, R11, R12, R13, R14, R15,
+            FP0, FP1, FP2, FP3, FP4, FP5, FP6, ST0, ST1,
+            MM0, MM1, MM2, MM3, MM4, MM5, MM6, MM7,
+            XMM0, XMM1, XMM2, XMM3, XMM4, XMM5, XMM6, XMM7,
+            XMM8, XMM9, XMM10, XMM11, XMM12, XMM13, XMM14, XMM15,
+            EFLAGS],
+    // Mark RSP as use to prevent stack-pointer assignments appearing dead
+    // (see call instructions in X86InstrControl.td) 
+    Uses = [RSP] in {
+    let usesCustomInserter = 1 in
+    def SWAPSTACK64 : I<0, Pseudo, (outs), (ins GR64:$dst, variable_ops), 
+                        "# SWAPSTACK", [(X86SwapStack GR64:$dst)]>;
+    // The actual jump is performed by a SWAPSTACKJMP64r instruction
+    // which is just a jump, but takes the call arguments as parameters
+    // so that they are marked as live.
+    let isTerminator = 1, isBarrier = 1 in 
+    def SWAPSTACKJMP64r : I<0xFF, MRM4r, (outs), (ins GR64:$dst, variable_ops),
+                            "jmp{q}\t{*}$dst  # SWAPSTACK", []>;
+  }
+}
 
 //===----------------------------------------------------------------------===//
 // EH Pseudo Instructions

@@ -113,6 +113,43 @@ def RetCC_X86_Win64_C : CallingConv<[
 ]>;
 
 
+
+// SwapStack convention
+// This version takes an extra parameter, the other coroutine
+// This is used for formal arguments and for call results
+// For calls, the extra parameter is implicit as the callee
+def X86_64_SwapStack_ExtraParam : CallingConv<[
+    CCIfType<[i8, i16], CCPromoteToType<i32>>,
+
+    CCIfType<[i32], CCAssignToReg<[EAX, EDI, ESI, EDX, ECX, R8D, R9D]>>,
+    CCIfType<[i64], CCAssignToReg<[RAX, RDI, RSI, RDX, RCX, R8 , R9 ]>>
+]>;
+
+def X86_64_SwapStack_NoExtraParam : CallingConv<[
+    CCIfType<[i8, i16], CCPromoteToType<i32>>,
+
+    // Apart from the EAX/RAX parameter,
+    // this must match the ExtraParam version
+    CCIfType<[i32], CCAssignToReg<[EDI, ESI, EDX, ECX, R8D, R9D]>>,
+    CCIfType<[i64], CCAssignToReg<[RDI, RSI, RDX, RCX, R8 , R9 ]>>
+]>;
+
+// SwapStack return convention
+def RetCC_X86_64_SwapStack : CallingConv<[
+    CCDelegateTo<X86_64_SwapStack_ExtraParam>
+]>;
+
+// SwapStack call convention
+def CC_X86_64_SwapStack : CallingConv<[
+    CCIf<"State.getCallOrPrologue() == Prologue", 
+         CCDelegateTo<X86_64_SwapStack_ExtraParam>>,
+    CCIf<"State.getCallOrPrologue() == Call",
+         CCDelegateTo<X86_64_SwapStack_NoExtraParam>>
+]>;
+
+
+
+
 // This is the root return-value convention for the X86-32 backend.
 def RetCC_X86_32 : CallingConv<[
   // If FastCC, use RetCC_X86_32_Fast.
@@ -123,6 +160,9 @@ def RetCC_X86_32 : CallingConv<[
 
 // This is the root return-value convention for the X86-64 backend.
 def RetCC_X86_64 : CallingConv<[
+  // SWAPSTACK convention
+  CCIfCC<"CallingConv::SwapStack", CCDelegateTo<RetCC_X86_64_SwapStack>>,
+  
   // Mingw64 and native Win64 use Win64 CC
   CCIfSubtarget<"isTargetWin64()", CCDelegateTo<RetCC_X86_Win64_C>>,
 
@@ -256,6 +296,9 @@ def CC_X86_64_GHC : CallingConv<[
             CCAssignToReg<[XMM1, XMM2, XMM3, XMM4, XMM5, XMM6]>>>
 ]>;
 
+
+
+
 //===----------------------------------------------------------------------===//
 // X86 C Calling Convention
 //===----------------------------------------------------------------------===//
@@ -387,6 +430,8 @@ def CC_X86_32_GHC : CallingConv<[
   CCIfType<[i32], CCAssignToReg<[EBX, EBP, EDI, ESI]>>
 ]>;
 
+
+
 //===----------------------------------------------------------------------===//
 // X86 Root Argument Calling Conventions
 //===----------------------------------------------------------------------===//
@@ -405,6 +450,7 @@ def CC_X86_32 : CallingConv<[
 // This is the root argument convention for the X86-64 backend.
 def CC_X86_64 : CallingConv<[
   CCIfCC<"CallingConv::GHC", CCDelegateTo<CC_X86_64_GHC>>,
+  CCIfCC<"CallingConv::SwapStack", CCDelegateTo<CC_X86_64_SwapStack>>,
 
   // Mingw64 and native Win64 use Win64 CC
   CCIfSubtarget<"isTargetWin64()", CCDelegateTo<CC_X86_Win64_C>>,

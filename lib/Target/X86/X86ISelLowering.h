@@ -76,6 +76,10 @@ namespace llvm {
       ///
       CALL,
 
+      /// SWAPSTACK - FIXME doc
+      /// FIXME: Move this to ISD:: when it becomes portable
+      SWAPSTACK,
+
       /// RDTSC_DAG - This operation implements the lowering for
       /// readcyclecounter
       RDTSC_DAG,
@@ -805,6 +809,7 @@ namespace llvm {
     SDValue LowerVASTART(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerVAARG(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerVACOPY(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerNEWSTACK(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerRETURNADDR(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerFRAMEADDR(SDValue Op, SelectionDAG &DAG) const;
@@ -931,6 +936,10 @@ namespace llvm {
 
     MachineBasicBlock *emitLoweredTLSAddr(MachineInstr *MI,
                                           MachineBasicBlock *BB) const;
+
+    MachineBasicBlock *EmitLoweredSwapStack(MachineInstr *MI,
+                                            MachineBasicBlock *BB) const;
+
 
     /// Emit nodes that will be selected as "test Op0,Op0", or something
     /// equivalent, for use with the given x86 condition code.

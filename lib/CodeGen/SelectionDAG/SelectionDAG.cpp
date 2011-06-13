@@ -5950,6 +5950,7 @@ std::string SDNode::getOperationName(const SelectionDAG *G) const {
   case ISD::BUILD_PAIR:         return "build_pair";
   case ISD::STACKSAVE:          return "stacksave";
   case ISD::STACKRESTORE:       return "stackrestore";
+  case ISD::NEWSTACK:           return "newstack";
   case ISD::TRAP:               return "trap";
 
   // Bit manipulation

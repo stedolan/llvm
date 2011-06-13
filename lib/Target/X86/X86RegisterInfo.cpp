@@ -423,15 +423,18 @@ X86RegisterInfo::getRegPressureLimit(const TargetRegisterClass *RC,
 const unsigned *
 X86RegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
   bool callsEHReturn = false;
-  bool ghcCall = false;
+  bool allCallerSave = false;
 
   if (MF) {
     callsEHReturn = MF->getMMI().callsEHReturn();
     const Function *F = MF->getFunction();
-    ghcCall = (F ? F->getCallingConv() == CallingConv::GHC : false);
+    if (F) {
+      CallingConv::ID CC = F->getCallingConv();
+      allCallerSave = (CC == CallingConv::GHC || CC == CallingConv::SwapStack);
+    }
   }
 
-  static const unsigned GhcCalleeSavedRegs[] = {
+  static const unsigned CalleeNoSavedRegs[] = {
     0
   };
 
@@ -460,8 +463,8 @@ X86RegisterInfo::getCalleeSavedRegs(const MachineFunction *MF) const {
     X86::XMM14, X86::XMM15, 0
   };
 
-  if (ghcCall) {
-    return GhcCalleeSavedRegs;
+  if (allCallerSave) {
+    return CalleeNoSavedRegs;
   } else if (Is64Bit) {
     if (IsWin64)
       return CalleeSavedRegsWin64;

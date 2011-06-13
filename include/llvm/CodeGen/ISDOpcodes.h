@@ -524,6 +524,11 @@ namespace ISD {
     // it returns an output chain.
     STACKRESTORE,
 
+    // NEWSTACK has four inputs and two outputs
+    // Operands: input chain, new stack, length, function ptr
+    // Results:  new stack, output chain
+    NEWSTACK,
+
     // CALLSEQ_START/CALLSEQ_END - These operators mark the beginning and end of
     // a call sequence, and carry arbitrary information that target might want
     // to know.  The first operand is a chain, the rest are specified by the

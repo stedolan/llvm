@@ -227,6 +227,11 @@ def X86WinAlloca : SDNode<"X86ISD::WIN_ALLOCA", SDTX86Void,
 def X86TLSCall : SDNode<"X86ISD::TLSCALL", SDT_X86TLSCALL,
                         [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 
+def X86SwapStack : SDNode<"X86ISD::SWAPSTACK", SDT_X86Call,
+                          [SDNPHasChain, SDNPOutGlue, SDNPOptInGlue,
+                          SDNPVariadic]>;
+
+
 //===----------------------------------------------------------------------===//
 // X86 Operand Definitions.
 //

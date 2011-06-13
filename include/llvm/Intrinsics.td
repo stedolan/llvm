@@ -221,6 +221,12 @@ def int_readcyclecounter : Intrinsic<[llvm_i64_ty]>;
 // guard to the correct place on the stack frame.
 def int_stackprotector : Intrinsic<[], [llvm_ptr_ty, llvm_ptrptr_ty], []>;
 
+
+// NewStack Instrinsic - Used to setup a new stack for the SwapStack mechanism
+def int_newstack      : Intrinsic<[llvm_ptr_ty],
+                                  [llvm_ptr_ty, llvm_i32_ty, llvm_ptr_ty],
+                                  [IntrReadWriteArgMem, NoCapture<0>]>;
+
 //===------------------- Standard C Library Intrinsics --------------------===//
 //
 

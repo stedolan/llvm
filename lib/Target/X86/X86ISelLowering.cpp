@@ -556,6 +556,8 @@ X86TargetLowering::X86TargetLowering(X86TargetMachine &TM)
                       && !Subtarget->isTargetEnvMacho()
                       ? Custom : Expand));
 
+  setOperationAction(ISD::NEWSTACK,           MVT::Other, Custom);
+
   if (!UseSoftFloat && X86ScalarSSEf64) {
     // f32 and f64 use SSE.
     // Set up the FP register classes.
@@ -1594,6 +1596,12 @@ static bool IsTailCallConvention(CallingConv::ID CC) {
   return (CC == CallingConv::Fast || CC == CallingConv::GHC);
 }
 
+/// IsVarArgConvention - Return true if the calling convention is one that
+/// support varargs
+static bool IsVarArgConvention(CallingConv::ID CC){
+  return (CC != CallingConv::Fast && CC != CallingConv::GHC && CC != CallingConv::SwapStack);
+}
+
 bool X86TargetLowering::mayBeEmittedAsTailCall(CallInst *CI) const {
   if (!CI->isTailCall())
     return false;
@@ -1674,8 +1682,8 @@ X86TargetLowering::LowerFormalArguments(SDValue Chain,
   bool Is64Bit = Subtarget->is64Bit();
   bool IsWin64 = Subtarget->isTargetWin64();
 
-  assert(!(isVarArg && IsTailCallConvention(CallConv)) &&
-         "Var args not supported with calling convention fastcc or ghc");
+  assert(!(isVarArg && !IsVarArgConvention(CallConv)) &&
+         "Var args not supported with this calling convention");
 
   // Assign locations to all of the incoming arguments.
   SmallVector<CCValAssign, 16> ArgLocs;
@@ -1687,6 +1695,7 @@ X86TargetLowering::LowerFormalArguments(SDValue Chain,
     CCInfo.AllocateStack(32, 8);
   }
 
+  CCInfo.setCallOrPrologue(Prologue);
   CCInfo.AnalyzeFormalArguments(Ins, CC_X86);
 
   unsigned LastVal = ~0U;
@@ -2001,14 +2010,14 @@ X86TargetLowering::LowerCall(SDValue Chain, SDValue Callee,
       ++NumTailCalls;
   }
 
-  assert(!(isVarArg && IsTailCallConvention(CallConv)) &&
-         "Var args not supported with calling convention fastcc or ghc");
+  assert(!(isVarArg && !IsVarArgConvention(CallConv)) &&
+         "Var args not supported with calling conventions fastcc, ghc or swapstack");
 
   // Analyze operands of the call, assigning locations to each operand.
   SmallVector<CCValAssign, 16> ArgLocs;
   CCState CCInfo(CallConv, isVarArg, getTargetMachine(),
                  ArgLocs, *DAG.getContext());
-
+  CCInfo.setCallOrPrologue(Call);
   // Allocate shadow area for Win64
   if (IsWin64) {
     CCInfo.AllocateStack(32, 8);
@@ -2356,7 +2365,9 @@ X86TargetLowering::LowerCall(SDValue Chain, SDValue Callee,
                        NodeTys, &Ops[0], Ops.size());
   }
 
-  Chain = DAG.getNode(X86ISD::CALL, dl, NodeTys, &Ops[0], Ops.size());
+  unsigned OpCode = 
+    CallConv == CallingConv::SwapStack ? X86ISD::SWAPSTACK : X86ISD::CALL;
+  Chain = DAG.getNode(OpCode, dl, NodeTys, &Ops[0], Ops.size());
   InFlag = Chain.getValue(1);
 
   // Create the CALLSEQ_END node.
@@ -2546,6 +2557,7 @@ X86TargetLowering::IsEligibleForTailCallOptimization(SDValue Callee,
     SmallVector<CCValAssign, 16> ArgLocs;
     CCState CCInfo(CalleeCC, isVarArg, getTargetMachine(),
                    ArgLocs, *DAG.getContext());
+    CCInfo.setCallOrPrologue(Call);
 
     CCInfo.AnalyzeCallOperands(Outs, CC_X86);
     for (unsigned i = 0, e = ArgLocs.size(); i != e; ++i)
@@ -2567,6 +2579,7 @@ X86TargetLowering::IsEligibleForTailCallOptimization(SDValue Callee,
     SmallVector<CCValAssign, 16> RVLocs;
     CCState CCInfo(CalleeCC, false, getTargetMachine(),
                    RVLocs, *DAG.getContext());
+    CCInfo.setCallOrPrologue(Call);
     CCInfo.AnalyzeCallResult(Ins, RetCC_X86);
     for (unsigned i = 0, e = RVLocs.size(); i != e; ++i) {
       CCValAssign &VA = RVLocs[i];
@@ -2581,11 +2594,13 @@ X86TargetLowering::IsEligibleForTailCallOptimization(SDValue Callee,
     SmallVector<CCValAssign, 16> RVLocs1;
     CCState CCInfo1(CalleeCC, false, getTargetMachine(),
                     RVLocs1, *DAG.getContext());
+    CCInfo1.setCallOrPrologue(Call);
     CCInfo1.AnalyzeCallResult(Ins, RetCC_X86);
 
     SmallVector<CCValAssign, 16> RVLocs2;
     CCState CCInfo2(CallerCC, false, getTargetMachine(),
                     RVLocs2, *DAG.getContext());
+    CCInfo2.setCallOrPrologue(Call);
     CCInfo2.AnalyzeCallResult(Ins, RetCC_X86);
 
     if (RVLocs1.size() != RVLocs2.size())
@@ -2613,7 +2628,7 @@ X86TargetLowering::IsEligibleForTailCallOptimization(SDValue Callee,
     SmallVector<CCValAssign, 16> ArgLocs;
     CCState CCInfo(CalleeCC, isVarArg, getTargetMachine(),
                    ArgLocs, *DAG.getContext());
-
+    CCInfo.setCallOrPrologue(Call);
     // Allocate shadow area for Win64
     if (Subtarget->isTargetWin64()) {
       CCInfo.AllocateStack(32, 8);
@@ -8125,6 +8140,35 @@ SDValue X86TargetLowering::LowerVACOPY(SDValue Op, SelectionDAG &DAG) const {
                        MachinePointerInfo(DstSV), MachinePointerInfo(SrcSV));
 }
 
+
+SDValue X86TargetLowering::LowerNEWSTACK(SDValue Op, SelectionDAG &DAG) const {
+  // FIXME x86 32-bit 
+  assert(Subtarget->is64Bit() && "NEWSTACK is unimplemented for 32-bit");
+  SDValue Chain = Op.getOperand(0);
+  SDValue MemPtr = Op.getOperand(1);
+  SDValue Len = Op.getOperand(2);
+  SDValue FuncPtr = Op.getOperand(3);
+  DebugLoc DL = Op.getDebugLoc();
+
+  // Store the function ptr at MemPtr + Len - sizeof(void*)
+  // Return this address
+
+  SDValue StoreAddr = DAG.getNode(ISD::ADD, DL, getPointerTy(), 
+                                  MemPtr, 
+                                  DAG.getZExtOrTrunc(Len, DL,
+                                                     getPointerTy()));
+  StoreAddr = DAG.getNode(ISD::SUB, DL, getPointerTy(),
+                          StoreAddr, 
+                          DAG.getIntPtrConstant(TD->getPointerSize()));
+
+  Chain = DAG.getStore(Chain, DL, FuncPtr, StoreAddr, MachinePointerInfo(),
+                       false, false, 0);
+
+  SDValue Rets[] = { StoreAddr, Chain };
+  return DAG.getMergeValues(Rets, 2, DL);
+}
+
+
 SDValue
 X86TargetLowering::LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG) const {
   DebugLoc dl = Op.getDebugLoc();
@@ -9210,6 +9254,7 @@ SDValue X86TargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const {
   case ISD::VASTART:            return LowerVASTART(Op, DAG);
   case ISD::VAARG:              return LowerVAARG(Op, DAG);
   case ISD::VACOPY:             return LowerVACOPY(Op, DAG);
+  case ISD::NEWSTACK:           return LowerNEWSTACK(Op, DAG);
   case ISD::INTRINSIC_WO_CHAIN: return LowerINTRINSIC_WO_CHAIN(Op, DAG);
   case ISD::RETURNADDR:         return LowerRETURNADDR(Op, DAG);
   case ISD::FRAMEADDR:          return LowerFRAMEADDR(Op, DAG);
@@ -9497,6 +9542,7 @@ const char *X86TargetLowering::getTargetNodeName(unsigned Opcode) const {
   case X86ISD::VASTART_SAVE_XMM_REGS: return "X86ISD::VASTART_SAVE_XMM_REGS";
   case X86ISD::VAARG_64:           return "X86ISD::VAARG_64";
   case X86ISD::WIN_ALLOCA:         return "X86ISD::WIN_ALLOCA";
+  case X86ISD::SWAPSTACK:          return "X86ISD::SWAPSTACK";
   }
 }
 
@@ -10599,6 +10645,83 @@ X86TargetLowering::EmitLoweredTLSCall(MachineInstr *MI,
 }
 
 MachineBasicBlock *
+X86TargetLowering::EmitLoweredSwapStack(MachineInstr *MI,
+                                        MachineBasicBlock *BB) const {
+  
+  const TargetInstrInfo *TII = getTargetMachine().getInstrInfo();
+  DebugLoc DL = MI->getDebugLoc();
+  bool Is64Bit = Subtarget->is64Bit();
+  MachineFunction* F = BB->getParent();
+
+
+  assert(MI->getOpcode() == Is64Bit ? X86::SWAPSTACK64 : -1 /*FIXME*/);
+  assert(MI->getNumOperands() >= 1 &&
+         MI->getOperand(0).isReg());
+
+  unsigned callee = MI->getOperand(0).getReg();
+
+  // Code sequence to be inserted:
+  //   push addrof(RET)
+  //   A = stackptr
+  //   stackptr = callee
+  //   pop calleePC
+  //   jmp *calleePC
+  // RET:
+
+  // Split the basic block
+  MachineBasicBlock* sinkMBB = F->CreateMachineBasicBlock(BB->getBasicBlock());
+  MachineFunction::iterator BBIter = BB;
+  ++BBIter;
+  F->insert(BBIter, sinkMBB);
+  sinkMBB->splice(sinkMBB->begin(), BB,
+                  llvm::next(MachineBasicBlock::iterator(MI)),
+                  BB->end());
+  sinkMBB->transferSuccessorsAndUpdatePHIs(BB);
+  BB->addSuccessor(sinkMBB);
+  
+  if (Is64Bit) {
+    unsigned retaddr = F->getRegInfo().
+      createVirtualRegister(X86::GR64RegisterClass);
+    BuildMI(BB, DL, TII->get(X86::LEA64r), retaddr)
+      .addReg(X86::RIP)  // Base
+      .addImm(1)         // Scale
+      .addReg(0)         // Index
+      .addMBB(sinkMBB)   // Displacement
+      .addReg(0);        // Segment
+    // FIXME: for non-PIC, a literal move is faster
+    //    BuildMI(BB, DL, TII->get(X86::MOV64ri), retaddr)
+    //      .addMBB(sinkMBB);
+    BuildMI(BB, DL, TII->get(X86::PUSH64r))
+      .addReg(retaddr);
+
+    BuildMI(BB, DL, TII->get(TargetOpcode::COPY), X86::RAX)
+      .addReg(X86::RSP);
+    BuildMI(BB, DL, TII->get(TargetOpcode::COPY), X86::RSP)
+      .addReg(callee);
+
+    unsigned jmpaddr = F->getRegInfo().
+      createVirtualRegister(X86::GR64RegisterClass);
+    BuildMI(BB, DL, TII->get(X86::POP64r), jmpaddr);
+    
+    MachineInstrBuilder jmp = 
+      BuildMI(BB, DL, TII->get(X86::SWAPSTACKJMP64r))
+        .setMIFlags(MI->getFlags())
+        .addReg(jmpaddr);
+
+    jmp.addReg(X86::RAX); // use of the caller stack so it's marked live
+
+    for (unsigned i = 1; i != MI->getNumOperands(); ++i) {
+      jmp.addOperand(MI->getOperand(i));
+    }
+  } else {
+    llvm_unreachable(0);
+  }
+
+  MI->eraseFromParent();   // The pseudo instruction is gone now.
+  return sinkMBB;
+}
+
+MachineBasicBlock *
 X86TargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
                                                MachineBasicBlock *BB) const {
   switch (MI->getOpcode()) {
@@ -10632,6 +10755,8 @@ X86TargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
   case X86::TLSCall_32:
   case X86::TLSCall_64:
     return EmitLoweredTLSCall(MI, BB);
+  case X86::SWAPSTACK64:
+    return EmitLoweredSwapStack(MI, BB);
   case X86::CMOV_GR8:
   case X86::CMOV_FR32:
   case X86::CMOV_FR64:
