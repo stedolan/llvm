@@ -10661,6 +10661,9 @@ X86TargetLowering::EmitLoweredSwapStack(MachineInstr *MI,
   bool Is64Bit = Subtarget->is64Bit();
   MachineFunction* F = BB->getParent();
 
+  const TargetFrameLowering* TFI = F->getTarget().getFrameLowering();
+  bool HasFramePointer = TFI->hasFP(*F);
+
 
   assert(MI->getOpcode() == Is64Bit ? X86::SWAPSTACK64 : -1 /*FIXME*/);
   assert(MI->getNumOperands() >= 1 &&
@@ -10688,6 +10691,12 @@ X86TargetLowering::EmitLoweredSwapStack(MachineInstr *MI,
   BB->addSuccessor(sinkMBB);
   
   if (Is64Bit) {
+    if (HasFramePointer) {
+      BuildMI(BB, DL, TII->get(X86::PUSH64r))
+        .addReg(X86::RBP);
+      BuildMI(*sinkMBB, sinkMBB->begin(), DL, TII->get(X86::POP64r))
+        .addReg(X86::RBP, RegState::Define);
+    }
     unsigned retaddr = F->getRegInfo().
       createVirtualRegister(X86::GR64RegisterClass);
     BuildMI(BB, DL, TII->get(X86::LEA64r), retaddr)
