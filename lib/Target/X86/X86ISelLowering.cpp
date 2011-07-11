@@ -8211,7 +8211,12 @@ SDValue X86TargetLowering::LowerNEWSTACK(SDValue Op, SelectionDAG &DAG) const {
   SDValue FuncPtr = Op.getOperand(3);
   DebugLoc DL = Op.getDebugLoc();
 
-  // Store the function ptr at MemPtr + Len - sizeof(void*)
+  MachineFunction &MF = DAG.getMachineFunction();
+  const TargetMachine &TM = MF.getTarget();
+  const TargetFrameLowering &TFI = *TM.getFrameLowering();
+  unsigned StackAlign = TFI.getStackAlignment();
+  uint64_t AlignMask = StackAlign - 1;
+  // Store the function ptr at (MemPtr + Len - sizeof(void*)) & ~AlignMask
   // Return this address
 
   SDValue StoreAddr = DAG.getNode(ISD::ADD, DL, getPointerTy(),
@@ -8221,6 +8226,10 @@ SDValue X86TargetLowering::LowerNEWSTACK(SDValue Op, SelectionDAG &DAG) const {
   StoreAddr = DAG.getNode(ISD::SUB, DL, getPointerTy(),
                           StoreAddr,
                           DAG.getIntPtrConstant(TD->getPointerSize()));
+
+  StoreAddr = DAG.getNode(ISD::AND, DL, getPointerTy(),
+                          StoreAddr,
+                          DAG.getIntPtrConstant(~AlignMask));
 
   Chain = DAG.getStore(Chain, DL, FuncPtr, StoreAddr, MachinePointerInfo(),
                        false, false, 0);
