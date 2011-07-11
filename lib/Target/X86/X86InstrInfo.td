@@ -1110,11 +1110,11 @@ def XCHG64rr : RI<0x87, MRMSrcReg, (outs GR64:$dst), (ins GR64:$val,GR64:$src),
 }
 
 def XCHG16ar : I<0x90, AddRegFrm, (outs), (ins GR16:$src),
-                  "xchg{w}\t{$src, %ax|%ax, $src}", []>, OpSize;
+                  "xchg{w}\t{$src, %ax|AX, $src}", []>, OpSize;
 def XCHG32ar : I<0x90, AddRegFrm, (outs), (ins GR32:$src),
-                  "xchg{l}\t{$src, %eax|%eax, $src}", []>;
+                  "xchg{l}\t{$src, %eax|EAX, $src}", []>;
 def XCHG64ar : RI<0x90, AddRegFrm, (outs), (ins GR64:$src),
-                  "xchg{q}\t{$src, %rax|%rax, $src}", []>;
+                  "xchg{q}\t{$src, %rax|RAX, $src}", []>;
 
 
 

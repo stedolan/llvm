@@ -374,5 +374,7 @@ bool X86Subtarget::IsCalleePop(bool IsVarArg,
     return GuaranteedTailCallOpt;
   case CallingConv::GHC:
     return GuaranteedTailCallOpt;
+  case CallingConv::SwapStack:
+    return false;
   }
 }

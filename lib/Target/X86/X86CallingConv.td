@@ -114,6 +114,26 @@ def RetCC_X86_Win64_C : CallingConv<[
 
 
 
+def X86_64_SwapStack_Spill : CallingConv<[
+  // Integer/FP values get stored in stack slots that are 8 bytes in size and
+  // 8-byte aligned if there are no more registers to hold them.
+  CCIfType<[i32, i64, f32, f64], CCAssignToStack<8, 8>>,
+
+  // Long doubles get stack slots whose size and alignment depends on the
+  // subtarget.
+  CCIfType<[f80], CCAssignToStack<0, 0>>,
+
+  // Vectors get 16-byte stack slots that are 16-byte aligned.
+  CCIfType<[v16i8, v8i16, v4i32, v2i64, v4f32, v2f64], CCAssignToStack<16, 16>>,
+
+  // 256-bit vectors get 32-byte stack slots that are 32-byte aligned.
+  CCIfType<[v32i8, v16i16, v8i32, v4i64, v8f32, v4f64],
+           CCAssignToStack<32, 32>>,
+
+  // __m64 vectors get 8-byte stack slots that are 8-byte aligned.
+  CCIfType<[x86mmx,v1i64], CCAssignToStack<8, 8>>
+]>;
+
 // SwapStack convention
 // This version takes an extra parameter, the other coroutine
 // This is used for formal arguments and for call results
@@ -122,7 +142,9 @@ def X86_64_SwapStack_ExtraParam : CallingConv<[
     CCIfType<[i8, i16], CCPromoteToType<i32>>,
 
     CCIfType<[i32], CCAssignToReg<[EAX, EDI, ESI, EDX, ECX, R8D, R9D]>>,
-    CCIfType<[i64], CCAssignToReg<[RAX, RDI, RSI, RDX, RCX, R8 , R9 ]>>
+    CCIfType<[i64], CCAssignToReg<[RAX, RDI, RSI, RDX, RCX, R8 , R9 ]>>,
+
+    CCDelegateTo<X86_64_SwapStack_Spill>
 ]>;
 
 def X86_64_SwapStack_NoExtraParam : CallingConv<[
@@ -131,7 +153,9 @@ def X86_64_SwapStack_NoExtraParam : CallingConv<[
     // Apart from the EAX/RAX parameter,
     // this must match the ExtraParam version
     CCIfType<[i32], CCAssignToReg<[EDI, ESI, EDX, ECX, R8D, R9D]>>,
-    CCIfType<[i64], CCAssignToReg<[RDI, RSI, RDX, RCX, R8 , R9 ]>>
+    CCIfType<[i64], CCAssignToReg<[RDI, RSI, RDX, RCX, R8 , R9 ]>>,
+
+    CCDelegateTo<X86_64_SwapStack_Spill>
 ]>;
 
 // SwapStack return convention
