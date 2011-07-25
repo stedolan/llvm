@@ -1875,6 +1875,8 @@ X86TargetLowering::LowerFormalArguments(SDValue Chain,
       FuncInfo->setVarArgsFrameIndex(0xAAAAAAA);
   }
 
+  FuncInfo->setArgumentStackSize(StackSize);
+
   return Chain;
 }
 

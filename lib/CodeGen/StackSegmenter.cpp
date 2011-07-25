@@ -42,6 +42,8 @@ void StackSegmenter::getAnalysisUsage(AnalysisUsage &info) const {
 bool StackSegmenter::runOnMachineFunction(MachineFunction &MF) {
   if (!EnableSegmentedStacks)
     return false;
+  const TargetFrameLowering &TFI = *MF.getTarget().getFrameLowering();
+  TFI.adjustForSegmentedStacks(MF);
   return true;
 }
 
