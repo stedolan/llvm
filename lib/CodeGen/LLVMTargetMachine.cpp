@@ -445,6 +445,10 @@ bool LLVMTargetMachine::addCommonCodeGenPasses(PassManagerBase &PM,
   PM.add(createPrologEpilogCodeInserter());
   printAndVerify(PM, "After PrologEpilogCodeInserter");
 
+  // Have functions use segmented stacks.
+  PM.add(createStackSegmenter());
+  printAndVerify(PM, "After StackSegmenter");
+
   // Run pre-sched2 passes.
   if (addPreSched2(PM, OptLevel))
     printAndVerify(PM, "After PreSched2 passes");

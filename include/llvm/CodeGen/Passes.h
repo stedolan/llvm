@@ -135,6 +135,11 @@ namespace llvm {
   ///
   FunctionPass *createPrologEpilogCodeInserter();
 
+  /// StackSegmenter Pass - If enabled, inserts code to make the functions use
+  /// segmented (split) stacks.
+  ///
+  FunctionPass *createStackSegmenter();
+
   /// LowerSubregs Pass - This pass lowers subregs to register-register copies
   /// which yields suboptimal, but correct code if the register allocator
   /// cannot coalesce all subreg operations during allocation.
