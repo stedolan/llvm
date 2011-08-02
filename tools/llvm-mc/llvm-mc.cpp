@@ -17,17 +17,17 @@
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCCodeEmitter.h"
 #include "llvm/MC/MCInstPrinter.h"
+#include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCObjectFileInfo.h"
+#include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSectionMachO.h"
 #include "llvm/MC/MCStreamer.h"
-#include "llvm/Target/TargetAsmBackend.h"
-#include "llvm/Target/TargetAsmParser.h"
+#include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/MC/SubtargetFeature.h"
+#include "llvm/MC/TargetAsmBackend.h"
+#include "llvm/MC/TargetAsmParser.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetRegistry.h"
-#include "llvm/Target/SubtargetFeature.h" // FIXME.
-#include "llvm/Target/TargetAsmInfo.h"  // FIXME.
-#include "llvm/Target/TargetLowering.h"  // FIXME.
-#include "llvm/Target/TargetLoweringObjectFile.h"  // FIXME.
-#include "llvm/Target/TargetMachine.h"  // FIXME.
 #include "llvm/Target/TargetSelect.h"
 #include "llvm/ADT/OwningPtr.h"
 #include "llvm/Support/CommandLine.h"
@@ -97,7 +97,7 @@ IncludeDirs("I", cl::desc("Directory of include files"),
 
 static cl::opt<std::string>
 ArchName("arch", cl::desc("Target arch to assemble for, "
-                            "see -version for available targets"));
+                          "see -version for available targets"));
 
 static cl::opt<std::string>
 TripleName("triple", cl::desc("Target triple to assemble for, "
@@ -109,13 +109,43 @@ MCPU("mcpu",
      cl::value_desc("cpu-name"),
      cl::init(""));
 
-static cl::opt<bool>
-NoInitialTextSection("n", cl::desc(
-                   "Don't assume assembly file starts in the text section"));
+static cl::opt<Reloc::Model>
+RelocModel("relocation-model",
+             cl::desc("Choose relocation model"),
+             cl::init(Reloc::Default),
+             cl::values(
+            clEnumValN(Reloc::Default, "default",
+                       "Target default relocation model"),
+            clEnumValN(Reloc::Static, "static",
+                       "Non-relocatable code"),
+            clEnumValN(Reloc::PIC_, "pic",
+                       "Fully relocatable, position independent code"),
+            clEnumValN(Reloc::DynamicNoPIC, "dynamic-no-pic",
+                       "Relocatable external references, non-relocatable code"),
+            clEnumValEnd));
+
+static cl::opt<llvm::CodeModel::Model>
+CMModel("code-model",
+        cl::desc("Choose code model"),
+        cl::init(CodeModel::Default),
+        cl::values(clEnumValN(CodeModel::Default, "default",
+                              "Target default code model"),
+                   clEnumValN(CodeModel::Small, "small",
+                              "Small code model"),
+                   clEnumValN(CodeModel::Kernel, "kernel",
+                              "Kernel code model"),
+                   clEnumValN(CodeModel::Medium, "medium",
+                              "Medium code model"),
+                   clEnumValN(CodeModel::Large, "large",
+                              "Large code model"),
+                   clEnumValEnd));
 
 static cl::opt<bool>
-SaveTempLabels("L", cl::desc(
-                 "Don't discard temporary labels"));
+NoInitialTextSection("n", cl::desc("Don't assume assembly file starts "
+                                   "in the text section"));
+
+static cl::opt<bool>
+SaveTempLabels("L", cl::desc("Don't discard temporary labels"));
 
 enum ActionType {
   AC_AsLex,
@@ -195,7 +225,7 @@ static int AsLexInput(const char *ProgName) {
   if (!TheTarget)
     return 1;
 
-  llvm::OwningPtr<MCAsmInfo> MAI(TheTarget->createAsmInfo(TripleName));
+  llvm::OwningPtr<MCAsmInfo> MAI(TheTarget->createMCAsmInfo(TripleName));
   assert(MAI && "Unable to create target asm info!");
 
   AsmLexer Lexer(*MAI);
@@ -305,32 +335,21 @@ static int AssembleInput(const char *ProgName) {
   SrcMgr.setIncludeDirs(IncludeDirs);
 
 
-  llvm::OwningPtr<MCAsmInfo> MAI(TheTarget->createAsmInfo(TripleName));
+  llvm::OwningPtr<MCAsmInfo> MAI(TheTarget->createMCAsmInfo(TripleName));
   assert(MAI && "Unable to create target asm info!");
+
+  llvm::OwningPtr<MCRegisterInfo> MRI(TheTarget->createMCRegInfo(TripleName));
+  assert(MRI && "Unable to create target register info!");
 
   // Package up features to be passed to target/subtarget
   std::string FeaturesStr;
-  if (MCPU.size()) {
-    SubtargetFeatures Features;
-    Features.setCPU(MCPU);
-    FeaturesStr = Features.getString();
-  }
 
-  // FIXME: We shouldn't need to do this (and link in codegen).
-  //        When we split this out, we should do it in a way that makes
-  //        it straightforward to switch subtargets on the fly (.e.g,
-  //        the .cpu and .code16 directives).
-  OwningPtr<TargetMachine> TM(TheTarget->createTargetMachine(TripleName,
-                                                             FeaturesStr));
+  // FIXME: This is not pretty. MCContext has a ptr to MCObjectFileInfo and
+  // MCObjectFileInfo needs a MCContext reference in order to initialize itself.
+  OwningPtr<MCObjectFileInfo> MOFI(new MCObjectFileInfo());
+  MCContext Ctx(*MAI, *MRI, MOFI.get());
+  MOFI->InitMCObjectFileInfo(TripleName, RelocModel, CMModel, Ctx);
 
-  if (!TM) {
-    errs() << ProgName << ": error: could not create target for triple '"
-           << TripleName << "'.\n";
-    return 1;
-  }
-
-  const TargetAsmInfo *tai = new TargetAsmInfo(*TM);
-  MCContext Ctx(*MAI, tai);
   if (SaveTempLabels)
     Ctx.setAllowTemporaryLabels(false);
 
@@ -341,18 +360,18 @@ static int AssembleInput(const char *ProgName) {
   formatted_raw_ostream FOS(Out->os());
   OwningPtr<MCStreamer> Str;
 
-  const TargetLoweringObjectFile &TLOF =
-    TM->getTargetLowering()->getObjFileLowering();
-  const_cast<TargetLoweringObjectFile&>(TLOF).Initialize(Ctx, *TM);
+  OwningPtr<MCInstrInfo> MCII(TheTarget->createMCInstrInfo());
+  OwningPtr<MCSubtargetInfo>
+    STI(TheTarget->createMCSubtargetInfo(TripleName, MCPU, FeaturesStr));
 
   // FIXME: There is a bit of code duplication with addPassesToEmitFile.
   if (FileType == OFT_AssemblyFile) {
     MCInstPrinter *IP =
-      TheTarget->createMCInstPrinter(*TM, OutputAsmVariant, *MAI);
+      TheTarget->createMCInstPrinter(OutputAsmVariant, *MAI);
     MCCodeEmitter *CE = 0;
     TargetAsmBackend *TAB = 0;
     if (ShowEncoding) {
-      CE = TheTarget->createCodeEmitter(*TM, Ctx);
+      CE = TheTarget->createCodeEmitter(*MCII, *STI, Ctx);
       TAB = TheTarget->createAsmBackend(TripleName);
     }
     Str.reset(TheTarget->createAsmStreamer(Ctx, FOS, /*asmverbose*/true,
@@ -363,7 +382,7 @@ static int AssembleInput(const char *ProgName) {
     Str.reset(createNullStreamer(Ctx));
   } else {
     assert(FileType == OFT_ObjectFile && "Invalid file type!");
-    MCCodeEmitter *CE = TheTarget->createCodeEmitter(*TM, Ctx);
+    MCCodeEmitter *CE = TheTarget->createCodeEmitter(*MCII, *STI, Ctx);
     TargetAsmBackend *TAB = TheTarget->createAsmBackend(TripleName);
     Str.reset(TheTarget->createObjectStreamer(TripleName, Ctx, *TAB,
                                               FOS, CE, RelaxAll,
@@ -376,7 +395,7 @@ static int AssembleInput(const char *ProgName) {
 
   OwningPtr<MCAsmParser> Parser(createMCAsmParser(*TheTarget, SrcMgr, Ctx,
                                                    *Str.get(), *MAI));
-  OwningPtr<TargetAsmParser> TAP(TheTarget->createAsmParser(*Parser, *TM));
+  OwningPtr<TargetAsmParser> TAP(TheTarget->createAsmParser(*STI, *Parser));
   if (!TAP) {
     errs() << ProgName
            << ": error: this target does not support assembly parsing.\n";
@@ -414,28 +433,7 @@ static int DisassembleInput(const char *ProgName, bool Enhanced) {
     Res =
       Disassembler::disassembleEnhanced(TripleName, *Buffer.take(), Out->os());
   } else {
-    // Package up features to be passed to target/subtarget
-    std::string FeaturesStr;
-    if (MCPU.size()) {
-      SubtargetFeatures Features;
-      Features.setCPU(MCPU);
-      FeaturesStr = Features.getString();
-    }
-
-    // FIXME: We shouldn't need to do this (and link in codegen).
-    //        When we split this out, we should do it in a way that makes
-    //        it straightforward to switch subtargets on the fly (.e.g,
-    //        the .cpu and .code16 directives).
-    OwningPtr<TargetMachine> TM(TheTarget->createTargetMachine(TripleName,
-                                                               FeaturesStr));
-
-    if (!TM) {
-      errs() << ProgName << ": error: could not create target for triple '"
-             << TripleName << "'.\n";
-      return 1;
-    }
-
-    Res = Disassembler::disassemble(*TheTarget, *TM, TripleName,
+    Res = Disassembler::disassemble(*TheTarget, TripleName,
                                     *Buffer.take(), Out->os());
   }
 
@@ -456,9 +454,14 @@ int main(int argc, char **argv) {
   llvm::InitializeAllTargetInfos();
   // FIXME: We shouldn't need to initialize the Target(Machine)s.
   llvm::InitializeAllTargets();
+  llvm::InitializeAllTargetMCs();
   llvm::InitializeAllAsmPrinters();
   llvm::InitializeAllAsmParsers();
   llvm::InitializeAllDisassemblers();
+
+  // Register the target printer for --version.
+  // FIXME: Remove when we stop initializing the Target(Machine)s above.
+  cl::AddExtraVersionPrinter(TargetRegistry::printRegisteredTargetsForVersion);
 
   cl::ParseCommandLineOptions(argc, argv, "llvm machine code playground\n");
   TripleName = Triple::normalize(TripleName);

@@ -526,7 +526,7 @@ static Value *SimplifyAddInst(Value *Op0, Value *Op1, bool isNSW, bool isNUW,
     if (Constant *CRHS = dyn_cast<Constant>(Op1)) {
       Constant *Ops[] = { CLHS, CRHS };
       return ConstantFoldInstOperands(Instruction::Add, CLHS->getType(),
-                                      Ops, 2, TD);
+                                      Ops, TD);
     }
 
     // Canonicalize the constant to the RHS.
@@ -595,7 +595,7 @@ static Value *SimplifySubInst(Value *Op0, Value *Op1, bool isNSW, bool isNUW,
     if (Constant *CRHS = dyn_cast<Constant>(Op1)) {
       Constant *Ops[] = { CLHS, CRHS };
       return ConstantFoldInstOperands(Instruction::Sub, CLHS->getType(),
-                                      Ops, 2, TD);
+                                      Ops, TD);
     }
 
   // X - undef -> undef
@@ -715,7 +715,7 @@ static Value *SimplifyMulInst(Value *Op0, Value *Op1, const TargetData *TD,
     if (Constant *CRHS = dyn_cast<Constant>(Op1)) {
       Constant *Ops[] = { CLHS, CRHS };
       return ConstantFoldInstOperands(Instruction::Mul, CLHS->getType(),
-                                      Ops, 2, TD);
+                                      Ops, TD);
     }
 
     // Canonicalize the constant to the RHS.
@@ -788,7 +788,7 @@ static Value *SimplifyDiv(Instruction::BinaryOps Opcode, Value *Op0, Value *Op1,
   if (Constant *C0 = dyn_cast<Constant>(Op0)) {
     if (Constant *C1 = dyn_cast<Constant>(Op1)) {
       Constant *Ops[] = { C0, C1 };
-      return ConstantFoldInstOperands(Opcode, C0->getType(), Ops, 2, TD);
+      return ConstantFoldInstOperands(Opcode, C0->getType(), Ops, TD);
     }
   }
 
@@ -909,7 +909,7 @@ static Value *SimplifyRem(Instruction::BinaryOps Opcode, Value *Op0, Value *Op1,
   if (Constant *C0 = dyn_cast<Constant>(Op0)) {
     if (Constant *C1 = dyn_cast<Constant>(Op1)) {
       Constant *Ops[] = { C0, C1 };
-      return ConstantFoldInstOperands(Opcode, C0->getType(), Ops, 2, TD);
+      return ConstantFoldInstOperands(Opcode, C0->getType(), Ops, TD);
     }
   }
 
@@ -1012,7 +1012,7 @@ static Value *SimplifyShift(unsigned Opcode, Value *Op0, Value *Op1,
   if (Constant *C0 = dyn_cast<Constant>(Op0)) {
     if (Constant *C1 = dyn_cast<Constant>(Op1)) {
       Constant *Ops[] = { C0, C1 };
-      return ConstantFoldInstOperands(Opcode, C0->getType(), Ops, 2, TD);
+      return ConstantFoldInstOperands(Opcode, C0->getType(), Ops, TD);
     }
   }
 
@@ -1138,7 +1138,7 @@ static Value *SimplifyAndInst(Value *Op0, Value *Op1, const TargetData *TD,
     if (Constant *CRHS = dyn_cast<Constant>(Op1)) {
       Constant *Ops[] = { CLHS, CRHS };
       return ConstantFoldInstOperands(Instruction::And, CLHS->getType(),
-                                      Ops, 2, TD);
+                                      Ops, TD);
     }
 
     // Canonicalize the constant to the RHS.
@@ -1227,7 +1227,7 @@ static Value *SimplifyOrInst(Value *Op0, Value *Op1, const TargetData *TD,
     if (Constant *CRHS = dyn_cast<Constant>(Op1)) {
       Constant *Ops[] = { CLHS, CRHS };
       return ConstantFoldInstOperands(Instruction::Or, CLHS->getType(),
-                                      Ops, 2, TD);
+                                      Ops, TD);
     }
 
     // Canonicalize the constant to the RHS.
@@ -1321,7 +1321,7 @@ static Value *SimplifyXorInst(Value *Op0, Value *Op1, const TargetData *TD,
     if (Constant *CRHS = dyn_cast<Constant>(Op1)) {
       Constant *Ops[] = { CLHS, CRHS };
       return ConstantFoldInstOperands(Instruction::Xor, CLHS->getType(),
-                                      Ops, 2, TD);
+                                      Ops, TD);
     }
 
     // Canonicalize the constant to the RHS.
@@ -1372,7 +1372,7 @@ Value *llvm::SimplifyXorInst(Value *Op0, Value *Op1, const TargetData *TD,
   return ::SimplifyXorInst(Op0, Op1, TD, DT, RecursionLimit);
 }
 
-static const Type *GetCompareTy(Value *Op) {
+static Type *GetCompareTy(Value *Op) {
   return CmpInst::makeCmpResultType(Op->getType());
 }
 
@@ -1413,8 +1413,8 @@ static Value *SimplifyICmpInst(unsigned Predicate, Value *LHS, Value *RHS,
     Pred = CmpInst::getSwappedPredicate(Pred);
   }
 
-  const Type *ITy = GetCompareTy(LHS); // The return type.
-  const Type *OpTy = LHS->getType();   // The operand type.
+  Type *ITy = GetCompareTy(LHS); // The return type.
+  Type *OpTy = LHS->getType();   // The operand type.
 
   // icmp X, X -> true/false
   // X icmp undef -> true/false.  For example, icmp ugt %X, undef -> false
@@ -1593,8 +1593,8 @@ static Value *SimplifyICmpInst(unsigned Predicate, Value *LHS, Value *RHS,
   if (isa<CastInst>(LHS) && (isa<Constant>(RHS) || isa<CastInst>(RHS))) {
     Instruction *LI = cast<CastInst>(LHS);
     Value *SrcOp = LI->getOperand(0);
-    const Type *SrcTy = SrcOp->getType();
-    const Type *DstTy = LI->getType();
+    Type *SrcTy = SrcOp->getType();
+    Type *DstTy = LI->getType();
 
     // Turn icmp (ptrtoint x), (ptrtoint/constant) into a compare of the input
     // if the integer type is the same size as the pointer type.
@@ -2204,58 +2204,57 @@ Value *llvm::SimplifySelectInst(Value *CondVal, Value *TrueVal, Value *FalseVal,
   if (TrueVal == FalseVal)
     return TrueVal;
 
-  if (isa<UndefValue>(TrueVal))   // select C, undef, X -> X
-    return FalseVal;
-  if (isa<UndefValue>(FalseVal))   // select C, X, undef -> X
-    return TrueVal;
   if (isa<UndefValue>(CondVal)) {  // select undef, X, Y -> X or Y
     if (isa<Constant>(TrueVal))
       return TrueVal;
     return FalseVal;
   }
+  if (isa<UndefValue>(TrueVal))   // select C, undef, X -> X
+    return FalseVal;
+  if (isa<UndefValue>(FalseVal))   // select C, X, undef -> X
+    return TrueVal;
 
   return 0;
 }
 
 /// SimplifyGEPInst - Given operands for an GetElementPtrInst, see if we can
 /// fold the result.  If not, this returns null.
-Value *llvm::SimplifyGEPInst(Value *const *Ops, unsigned NumOps,
+Value *llvm::SimplifyGEPInst(ArrayRef<Value *> Ops,
                              const TargetData *TD, const DominatorTree *) {
   // The type of the GEP pointer operand.
-  const PointerType *PtrTy = cast<PointerType>(Ops[0]->getType());
+  PointerType *PtrTy = cast<PointerType>(Ops[0]->getType());
 
   // getelementptr P -> P.
-  if (NumOps == 1)
+  if (Ops.size() == 1)
     return Ops[0];
 
   if (isa<UndefValue>(Ops[0])) {
     // Compute the (pointer) type returned by the GEP instruction.
-    const Type *LastType = GetElementPtrInst::getIndexedType(PtrTy, &Ops[1],
-                                                             NumOps-1);
-    const Type *GEPTy = PointerType::get(LastType, PtrTy->getAddressSpace());
+    Type *LastType = GetElementPtrInst::getIndexedType(PtrTy, Ops.data() + 1,
+                                                       Ops.size() - 1);
+    Type *GEPTy = PointerType::get(LastType, PtrTy->getAddressSpace());
     return UndefValue::get(GEPTy);
   }
 
-  if (NumOps == 2) {
+  if (Ops.size() == 2) {
     // getelementptr P, 0 -> P.
     if (ConstantInt *C = dyn_cast<ConstantInt>(Ops[1]))
       if (C->isZero())
         return Ops[0];
     // getelementptr P, N -> P if P points to a type of zero size.
     if (TD) {
-      const Type *Ty = PtrTy->getElementType();
+      Type *Ty = PtrTy->getElementType();
       if (Ty->isSized() && TD->getTypeAllocSize(Ty) == 0)
         return Ops[0];
     }
   }
 
   // Check to see if this is constant foldable.
-  for (unsigned i = 0; i != NumOps; ++i)
+  for (unsigned i = 0, e = Ops.size(); i != e; ++i)
     if (!isa<Constant>(Ops[i]))
       return 0;
 
-  return ConstantExpr::getGetElementPtr(cast<Constant>(Ops[0]),
-                                        (Constant *const*)Ops+1, NumOps-1);
+  return ConstantExpr::getGetElementPtr(cast<Constant>(Ops[0]), Ops.slice(1));
 }
 
 /// SimplifyPHINode - See if we can fold the given phi.  If not, returns null.
@@ -2328,7 +2327,7 @@ static Value *SimplifyBinOp(unsigned Opcode, Value *LHS, Value *RHS,
     if (Constant *CLHS = dyn_cast<Constant>(LHS))
       if (Constant *CRHS = dyn_cast<Constant>(RHS)) {
         Constant *COps[] = {CLHS, CRHS};
-        return ConstantFoldInstOperands(Opcode, LHS->getType(), COps, 2, TD);
+        return ConstantFoldInstOperands(Opcode, LHS->getType(), COps, TD);
       }
 
     // If the operation is associative, try some generic simplifications.
@@ -2456,7 +2455,7 @@ Value *llvm::SimplifyInstruction(Instruction *I, const TargetData *TD,
     break;
   case Instruction::GetElementPtr: {
     SmallVector<Value*, 8> Ops(I->op_begin(), I->op_end());
-    Result = SimplifyGEPInst(&Ops[0], Ops.size(), TD, DT);
+    Result = SimplifyGEPInst(Ops, TD, DT);
     break;
   }
   case Instruction::PHI:

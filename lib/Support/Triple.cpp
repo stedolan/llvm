@@ -8,15 +8,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ADT/Triple.h"
-
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/Twine.h"
-#include <cassert>
 #include <cstring>
 using namespace llvm;
-
-//
 
 const char *Triple::getArchTypeName(ArchType Kind) {
   switch (Kind) {
@@ -113,6 +108,7 @@ const char *Triple::getOSTypeName(OSType Kind) {
   case Win32: return "win32";
   case Haiku: return "haiku";
   case Minix: return "minix";
+  case RTEMS: return "rtems";
   }
 
   return "<invalid>";
@@ -147,6 +143,8 @@ Triple::ArchType Triple::getArchTypeForLLVMName(StringRef Name) {
     return msp430;
   if (Name == "ppc64")
     return ppc64;
+  if (Name == "ppc32")
+    return ppc;
   if (Name == "ppc")
     return ppc;
   if (Name == "mblaze")
@@ -281,7 +279,8 @@ Triple::ArchType Triple::ParseArch(StringRef ArchName) {
     return cellspu;
   else if (ArchName == "msp430")
     return msp430;
-  else if (ArchName == "mips" || ArchName == "mipsallegrex")
+  else if (ArchName == "mips" || ArchName == "mipseb" ||
+           ArchName == "mipsallegrex")
     return mips;
   else if (ArchName == "mipsel" || ArchName == "mipsallegrexel" ||
            ArchName == "psp")
@@ -350,6 +349,8 @@ Triple::OSType Triple::ParseOS(StringRef OSName) {
     return Haiku;
   else if (OSName.startswith("minix"))
     return Minix;
+  else if (OSName.startswith("rtems"))
+    return RTEMS;
   else
     return UnknownOS;
 }

@@ -22,15 +22,17 @@
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstPrinter.h"
+#include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCStreamer.h"
+#include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCParser/AsmLexer.h"
 #include "llvm/MC/MCParser/MCAsmParser.h"
 #include "llvm/MC/MCParser/MCParsedAsmOperand.h"
+#include "llvm/MC/TargetAsmLexer.h"
+#include "llvm/MC/TargetAsmParser.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/MemoryObject.h"
 #include "llvm/Support/SourceMgr.h"
-#include "llvm/Target/TargetAsmLexer.h"
-#include "llvm/Target/TargetAsmParser.h"
 #include "llvm/Target/TargetRegistry.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetRegisterInfo.h"
@@ -106,6 +108,7 @@ void EDDisassembler::initialize() {
   
   InitializeAllTargetInfos();
   InitializeAllTargets();
+  InitializeAllTargetMCs();
   InitializeAllAsmPrinters();
   InitializeAllAsmParsers();
   InitializeAllDisassemblers();
@@ -167,11 +170,12 @@ EDDisassembler::EDDisassembler(CPUKey &key) :
   if (!Tgt)
     return;
   
+  std::string CPU;
   std::string featureString;
-  
-  TargetMachine.reset(Tgt->createTargetMachine(tripleString,
+  TargetMachine.reset(Tgt->createTargetMachine(tripleString, CPU,
                                                featureString));
-  
+
+  // FIXME: It shouldn't be using TargetRegisterInfo!
   const TargetRegisterInfo *registerInfo = TargetMachine->getRegisterInfo();
   
   if (!registerInfo)
@@ -179,11 +183,16 @@ EDDisassembler::EDDisassembler(CPUKey &key) :
     
   initMaps(*registerInfo);
   
-  AsmInfo.reset(Tgt->createAsmInfo(tripleString));
+  AsmInfo.reset(Tgt->createMCAsmInfo(tripleString));
   
   if (!AsmInfo)
     return;
-  
+
+  MRI.reset(Tgt->createMCRegInfo(tripleString));
+
+  if (!MRI)
+    return;
+
   Disassembler.reset(Tgt->createMCDisassembler());
   
   if (!Disassembler)
@@ -193,8 +202,7 @@ EDDisassembler::EDDisassembler(CPUKey &key) :
   
   InstString.reset(new std::string);
   InstStream.reset(new raw_string_ostream(*InstString));
-  InstPrinter.reset(Tgt->createMCInstPrinter(*TargetMachine, LLVMSyntaxVariant,
-                                             *AsmInfo));
+  InstPrinter.reset(Tgt->createMCInstPrinter(LLVMSyntaxVariant, *AsmInfo));
   
   if (!InstPrinter)
     return;
@@ -367,13 +375,16 @@ int EDDisassembler::parseInst(SmallVectorImpl<MCParsedAsmOperand*> &operands,
   SourceMgr sourceMgr;
   sourceMgr.setDiagHandler(diag_handler, static_cast<void*>(this));
   sourceMgr.AddNewSourceBuffer(buf, SMLoc()); // ownership of buf handed over
-  MCContext context(*AsmInfo, NULL);
+  MCContext context(*AsmInfo, *MRI, NULL);
   OwningPtr<MCStreamer> streamer(createNullStreamer(context));
   OwningPtr<MCAsmParser> genericParser(createMCAsmParser(*Tgt, sourceMgr,
                                                          context, *streamer,
                                                          *AsmInfo));
-  OwningPtr<TargetAsmParser> TargetParser(Tgt->createAsmParser(*genericParser,
-                                                               *TargetMachine));
+
+  StringRef triple = tripleFromArch(Key.Arch);
+  OwningPtr<MCSubtargetInfo> STI(Tgt->createMCSubtargetInfo(triple, "", ""));
+  OwningPtr<TargetAsmParser> TargetParser(Tgt->createAsmParser(*STI,
+                                                               *genericParser));
   
   AsmToken OpcodeToken = genericParser->Lex();
   AsmToken NextToken = genericParser->Lex();  // consume next token, because specificParser expects us to

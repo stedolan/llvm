@@ -350,7 +350,7 @@ static inline unsigned decodeRotate(uint32_t insn) {
 static bool DisassembleThumb1General(MCInst &MI, unsigned Opcode, uint32_t insn,
     unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
 
-  const TargetOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
+  const MCOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
   unsigned &OpIdx = NumOpsAdded;
 
   OpIdx = 0;
@@ -425,8 +425,8 @@ static bool DisassembleThumb1General(MCInst &MI, unsigned Opcode, uint32_t insn,
 static bool DisassembleThumb1DP(MCInst &MI, unsigned Opcode, uint32_t insn,
     unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
 
-  const TargetInstrDesc &TID = ARMInsts[Opcode];
-  const TargetOperandInfo *OpInfo = TID.OpInfo;
+  const MCInstrDesc &MCID = ARMInsts[Opcode];
+  const MCOperandInfo *OpInfo = MCID.OpInfo;
   unsigned &OpIdx = NumOpsAdded;
 
   OpIdx = 0;
@@ -454,7 +454,7 @@ static bool DisassembleThumb1DP(MCInst &MI, unsigned Opcode, uint32_t insn,
   assert(OpIdx < NumOps && OpInfo[OpIdx].RegClass == ARM::tGPRRegClassID
          && "Thumb reg operand expected");
   int Idx;
-  if ((Idx = TID.getOperandConstraint(OpIdx, TOI::TIED_TO)) != -1) {
+  if ((Idx = MCID.getOperandConstraint(OpIdx, MCOI::TIED_TO)) != -1) {
     // The reg operand is tied to the first reg operand.
     MI.addOperand(MI.getOperand(Idx));
     ++OpIdx;
@@ -479,7 +479,7 @@ static bool DisassembleThumb1DP(MCInst &MI, unsigned Opcode, uint32_t insn,
 // tBX: Rm
 // tBX_RET: 0 operand
 // tBX_RET_vararg: Rm
-// tBLXr_r9: Rm
+// tBLXr: Rm
 // tBRIND: Rm
 static bool DisassembleThumb1Special(MCInst &MI, unsigned Opcode, uint32_t insn,
     unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
@@ -489,8 +489,8 @@ static bool DisassembleThumb1Special(MCInst &MI, unsigned Opcode, uint32_t insn,
     return true;
 
   // BX/BLX/tBRIND (indirect branch, i.e, mov pc, Rm) has 1 reg operand: Rm.
-  if (Opcode==ARM::tBLXr_r9 || Opcode==ARM::tBX || Opcode==ARM::tBRIND) {
-    if (Opcode == ARM::tBLXr_r9) {
+  if (Opcode==ARM::tBLXr || Opcode==ARM::tBX || Opcode==ARM::tBRIND) {
+    if (Opcode == ARM::tBLXr) {
       // Handling the two predicate operands before the reg operand.
       if (!B->DoPredicateOperands(MI, Opcode, insn, NumOps))
         return false;
@@ -511,8 +511,8 @@ static bool DisassembleThumb1Special(MCInst &MI, unsigned Opcode, uint32_t insn,
     return true;
   }
 
-  const TargetInstrDesc &TID = ARMInsts[Opcode];
-  const TargetOperandInfo *OpInfo = TID.OpInfo;
+  const MCInstrDesc &MCID = ARMInsts[Opcode];
+  const MCOperandInfo *OpInfo = MCID.OpInfo;
   unsigned &OpIdx = NumOpsAdded;
 
   OpIdx = 0;
@@ -530,7 +530,7 @@ static bool DisassembleThumb1Special(MCInst &MI, unsigned Opcode, uint32_t insn,
 
   assert(OpIdx < NumOps && "More operands expected");
   int Idx;
-  if ((Idx = TID.getOperandConstraint(OpIdx, TOI::TIED_TO)) != -1) {
+  if ((Idx = MCID.getOperandConstraint(OpIdx, MCOI::TIED_TO)) != -1) {
     // The reg operand is tied to the first reg operand.
     MI.addOperand(MI.getOperand(Idx));
     ++OpIdx;
@@ -554,7 +554,7 @@ static bool DisassembleThumb1Special(MCInst &MI, unsigned Opcode, uint32_t insn,
 static bool DisassembleThumb1LdPC(MCInst &MI, unsigned Opcode, uint32_t insn,
     unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
 
-  const TargetOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
+  const MCOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
   if (!OpInfo) return false;
 
   assert(NumOps >= 2 && OpInfo[0].RegClass == ARM::tGPRRegClassID &&
@@ -602,7 +602,7 @@ static bool DisassembleThumb1LdPC(MCInst &MI, unsigned Opcode, uint32_t insn,
 static bool DisassembleThumb2Ldpci(MCInst &MI, unsigned Opcode,
     uint32_t insn, unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
 
-  const TargetOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
+  const MCOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
   if (!OpInfo) return false;
 
   assert(NumOps >= 2 &&
@@ -630,8 +630,8 @@ static bool DisassembleThumb2Ldpci(MCInst &MI, unsigned Opcode,
 static bool DisassembleThumb1LdSt(unsigned opA, MCInst &MI, unsigned Opcode,
     uint32_t insn, unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
 
-  const TargetInstrDesc &TID = ARMInsts[Opcode];
-  const TargetOperandInfo *OpInfo = TID.OpInfo;
+  const MCInstrDesc &MCID = ARMInsts[Opcode];
+  const MCOperandInfo *OpInfo = MCID.OpInfo;
   unsigned &OpIdx = NumOpsAdded;
 
   assert(NumOps >= 2
@@ -680,7 +680,7 @@ static bool DisassembleThumb1LdStSP(MCInst &MI, unsigned Opcode, uint32_t insn,
   assert((Opcode == ARM::tLDRspi || Opcode == ARM::tSTRspi)
          && "Unexpected opcode");
 
-  const TargetOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
+  const MCOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
   if (!OpInfo) return false;
 
   assert(NumOps >= 3 &&
@@ -708,7 +708,7 @@ static bool DisassembleThumb1AddPCi(MCInst &MI, unsigned Opcode, uint32_t insn,
 
   assert(Opcode == ARM::tADDrPCi && "Unexpected opcode");
 
-  const TargetOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
+  const MCOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
   if (!OpInfo) return false;
 
   assert(NumOps >= 2 && OpInfo[0].RegClass == ARM::tGPRRegClassID &&
@@ -733,7 +733,7 @@ static bool DisassembleThumb1AddSPi(MCInst &MI, unsigned Opcode, uint32_t insn,
 
   assert(Opcode == ARM::tADDrSPi && "Unexpected opcode");
 
-  const TargetOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
+  const MCOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
   if (!OpInfo) return false;
 
   assert(NumOps >= 3 &&
@@ -798,8 +798,7 @@ static bool DisassembleThumb1PushPop(MCInst &MI, unsigned Opcode, uint32_t insn,
 // tBKPT:            imm8
 // tNOP, tSEV, tYIELD, tWFE, tWFI:
 //   no operand (except predicate pair)
-// tSETENDBE, tSETENDLE, :
-//   no operand
+// tSETEND: i1
 // Others:           tRd tRn
 static bool DisassembleThumb1Misc(MCInst &MI, unsigned Opcode, uint32_t insn,
     unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
@@ -810,7 +809,7 @@ static bool DisassembleThumb1Misc(MCInst &MI, unsigned Opcode, uint32_t insn,
   if (Opcode == ARM::tPUSH || Opcode == ARM::tPOP)
     return DisassembleThumb1PushPop(MI, Opcode, insn, NumOps, NumOpsAdded, B);
 
-  const TargetOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
+  const MCOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
 
   // Predicate operands are handled elsewhere.
   if (NumOps == 2 &&
@@ -860,6 +859,12 @@ static bool DisassembleThumb1Misc(MCInst &MI, unsigned Opcode, uint32_t insn,
     return true;
   }
 
+  if (Opcode == ARM::tSETEND) {
+    MI.addOperand(MCOperand::CreateImm(slice(insn, 3, 1)));
+    NumOpsAdded = 1;
+    return true;
+  }
+
   assert(NumOps >= 2 && OpInfo[0].RegClass == ARM::tGPRRegClassID &&
          (OpInfo[1].RegClass < 0 || OpInfo[1].RegClass==ARM::tGPRRegClassID)
          && "Expect >=2 operands");
@@ -891,8 +896,8 @@ static bool DisassembleThumb1Misc(MCInst &MI, unsigned Opcode, uint32_t insn,
 static bool DisassembleThumb1LdStMul(bool Ld, MCInst &MI, unsigned Opcode,
                                      uint32_t insn, unsigned short NumOps,
                                      unsigned &NumOpsAdded, BO B) {
-  assert((Opcode == ARM::tLDMIA || Opcode == ARM::tLDMIA_UPD ||
-          Opcode == ARM::tSTMIA_UPD) && "Unexpected opcode");
+  assert((Opcode == ARM::tLDMIA || Opcode == ARM::tSTMIA) &&
+         "Unexpected opcode");
 
   unsigned tRt = getT1tRt(insn);
   NumOpsAdded = 0;
@@ -958,7 +963,7 @@ static bool DisassembleThumb1CondBr(MCInst &MI, unsigned Opcode, uint32_t insn,
   if (Opcode == ARM::tTRAP)
     return true;
 
-  const TargetOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
+  const MCOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
   if (!OpInfo) return false;
 
   assert(NumOps == 3 && OpInfo[0].RegClass < 0 &&
@@ -989,7 +994,7 @@ static bool DisassembleThumb1CondBr(MCInst &MI, unsigned Opcode, uint32_t insn,
 static bool DisassembleThumb1Br(MCInst &MI, unsigned Opcode, uint32_t insn,
     unsigned short NumOps, unsigned &NumOpsAdded, BO) {
 
-  const TargetOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
+  const MCOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
   if (!OpInfo) return false;
 
   assert(NumOps == 1 && OpInfo[0].RegClass < 0 && "1 imm operand expected");
@@ -1226,7 +1231,7 @@ static bool DisassembleThumb2LdStMul(MCInst &MI, unsigned Opcode, uint32_t insn,
 static bool DisassembleThumb2LdStEx(MCInst &MI, unsigned Opcode, uint32_t insn,
     unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
 
-  const TargetOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
+  const MCOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
   if (!OpInfo) return false;
 
   unsigned &OpIdx = NumOpsAdded;
@@ -1316,7 +1321,7 @@ static bool DisassembleThumb2LdStEx(MCInst &MI, unsigned Opcode, uint32_t insn,
 static bool DisassembleThumb2LdStDual(MCInst &MI, unsigned Opcode,
     uint32_t insn, unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
 
-  const TargetOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
+  const MCOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
   if (!OpInfo) return false;
 
   assert(NumOps >= 4
@@ -1423,8 +1428,8 @@ static inline bool Thumb2ShiftOpcode(unsigned Opcode) {
 static bool DisassembleThumb2DPSoReg(MCInst &MI, unsigned Opcode, uint32_t insn,
     unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
 
-  const TargetInstrDesc &TID = ARMInsts[Opcode];
-  const TargetOperandInfo *OpInfo = TID.OpInfo;
+  const MCInstrDesc &MCID = ARMInsts[Opcode];
+  const MCOperandInfo *OpInfo = MCID.OpInfo;
   unsigned &OpIdx = NumOpsAdded;
 
   // Special case handling.
@@ -1467,7 +1472,7 @@ static bool DisassembleThumb2DPSoReg(MCInst &MI, unsigned Opcode, uint32_t insn,
 
   if (ThreeReg) {
     int Idx;
-    if ((Idx = TID.getOperandConstraint(OpIdx, TOI::TIED_TO)) != -1) {
+    if ((Idx = MCID.getOperandConstraint(OpIdx, MCOI::TIED_TO)) != -1) {
       // Process tied_to operand constraint.
       MI.addOperand(MI.getOperand(Idx));
       ++OpIdx;
@@ -1498,11 +1503,17 @@ static bool DisassembleThumb2DPSoReg(MCInst &MI, unsigned Opcode, uint32_t insn,
       MI.addOperand(MCOperand::CreateImm(Imm));
     } else {
       // Build the constant shift specifier operand.
-      unsigned bits2 = getShiftTypeBits(insn);
       unsigned imm5 = getShiftAmtBits(insn);
-      ARM_AM::ShiftOpc ShOp = ARM_AM::no_shift;
-      unsigned ShAmt = decodeImmShift(bits2, imm5, ShOp);
-      MI.addOperand(MCOperand::CreateImm(ARM_AM::getSORegOpc(ShOp, ShAmt)));
+      // The PKHBT/PKHTB instructions have an implied shift type and so just
+      // use a plain immediate for the amount.
+      if (Opcode == ARM::t2PKHBT || Opcode == ARM::t2PKHTB)
+        MI.addOperand(MCOperand::CreateImm(imm5));
+      else {
+        ARM_AM::ShiftOpc ShOp = ARM_AM::no_shift;
+        unsigned bits2 = getShiftTypeBits(insn);
+        unsigned ShAmt = decodeImmShift(bits2, imm5, ShOp);
+        MI.addOperand(MCOperand::CreateImm(ARM_AM::getSORegOpc(ShOp, ShAmt)));
+      }
     }
     ++OpIdx;
   }
@@ -1521,8 +1532,8 @@ static bool DisassembleThumb2DPSoReg(MCInst &MI, unsigned Opcode, uint32_t insn,
 static bool DisassembleThumb2DPModImm(MCInst &MI, unsigned Opcode,
     uint32_t insn, unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
 
-  const TargetInstrDesc &TID = ARMInsts[Opcode];
-  const TargetOperandInfo *OpInfo = TID.OpInfo;
+  const MCInstrDesc &MCID = ARMInsts[Opcode];
+  const MCOperandInfo *OpInfo = MCID.OpInfo;
   unsigned &OpIdx = NumOpsAdded;
 
   OpIdx = 0;
@@ -1550,7 +1561,7 @@ static bool DisassembleThumb2DPModImm(MCInst &MI, unsigned Opcode,
       return false;
     }
     int Idx;
-    if ((Idx = TID.getOperandConstraint(OpIdx, TOI::TIED_TO)) != -1) {
+    if ((Idx = MCID.getOperandConstraint(OpIdx, MCOI::TIED_TO)) != -1) {
       // The reg operand is tied to the first reg operand.
       MI.addOperand(MI.getOperand(Idx));
     } else {
@@ -1590,16 +1601,14 @@ static inline bool Thumb2SaturateOpcode(unsigned Opcode) {
 /// o t2SSAT16, t2USAT16: Rs sat_pos Rn
 static bool DisassembleThumb2Sat(MCInst &MI, unsigned Opcode, uint32_t insn,
                                  unsigned &NumOpsAdded, BO B) {
-  const TargetInstrDesc &TID = ARMInsts[Opcode];
-  NumOpsAdded = TID.getNumOperands() - 2; // ignore predicate operands
+  const MCInstrDesc &MCID = ARMInsts[Opcode];
+  NumOpsAdded = MCID.getNumOperands() - 2; // ignore predicate operands
 
   // Disassemble the register def.
   MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::rGPRRegClassID,
                                                      decodeRs(insn))));
 
   unsigned Pos = slice(insn, 4, 0);
-  if (Opcode == ARM::t2SSAT || Opcode == ARM::t2SSAT16)
-    Pos += 1;
   MI.addOperand(MCOperand::CreateImm(Pos));
 
   MI.addOperand(MCOperand::CreateReg(getRegisterEnum(B, ARM::rGPRRegClassID,
@@ -1635,8 +1644,8 @@ static bool DisassembleThumb2Sat(MCInst &MI, unsigned Opcode, uint32_t insn,
 static bool DisassembleThumb2DPBinImm(MCInst &MI, unsigned Opcode,
     uint32_t insn, unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
 
-  const TargetInstrDesc &TID = ARMInsts[Opcode];
-  const TargetOperandInfo *OpInfo = TID.OpInfo;
+  const MCInstrDesc &MCID = ARMInsts[Opcode];
+  const MCOperandInfo *OpInfo = MCID.OpInfo;
   unsigned &OpIdx = NumOpsAdded;
 
   OpIdx = 0;
@@ -1659,7 +1668,7 @@ static bool DisassembleThumb2DPBinImm(MCInst &MI, unsigned Opcode,
   if (TwoReg) {
     assert(NumOps >= 3 && "Expect >= 3 operands");
     int Idx;
-    if ((Idx = TID.getOperandConstraint(OpIdx, TOI::TIED_TO)) != -1) {
+    if ((Idx = MCID.getOperandConstraint(OpIdx, MCOI::TIED_TO)) != -1) {
       // Process tied_to operand constraint.
       MI.addOperand(MI.getOperand(Idx));
     } else {
@@ -1729,7 +1738,7 @@ static inline bool t2MiscCtrlInstr(uint32_t insn) {
 // Branches: t2TPsoft -> no operand
 //
 // A8.6.23 BL, BLX (immediate)
-// Branches (defined in ARMInstrThumb.td): tBLr9, tBLXi_r9 -> imm operand
+// Branches (defined in ARMInstrThumb.td): tBL, tBLXi -> imm operand
 //
 // A8.6.26
 // t2BXJ -> Rn
@@ -1844,7 +1853,7 @@ static bool DisassembleThumb2BrMiscCtrl(MCInst &MI, unsigned Opcode,
   }
 
   // Some instructions have predicate operands first before the immediate.
-  if (Opcode == ARM::tBLXi_r9 || Opcode == ARM::tBLr9) {
+  if (Opcode == ARM::tBLXi || Opcode == ARM::tBL) {
     // Handling the two predicate operands before the imm operand.
     if (B->DoPredicateOperands(MI, Opcode, insn, NumOps))
       NumOpsAdded += 2;
@@ -1867,10 +1876,10 @@ static bool DisassembleThumb2BrMiscCtrl(MCInst &MI, unsigned Opcode,
   case ARM::t2Bcc:
     Offset = decodeImm32_B_EncodingT3(insn);
     break;
-  case ARM::tBLr9:
+  case ARM::tBL:
     Offset = decodeImm32_BL(insn);
     break;
-  case ARM::tBLXi_r9:
+  case ARM::tBLXi:
     Offset = decodeImm32_BLX(insn);
     break;
   }
@@ -1907,8 +1916,8 @@ static bool DisassembleThumb2PreLoad(MCInst &MI, unsigned Opcode, uint32_t insn,
   // t2PLDs:                      Rn Rm imm2=Inst{5-4}
   // Same pattern applies for t2PLDW* and t2PLI*.
 
-  const TargetInstrDesc &TID = ARMInsts[Opcode];
-  const TargetOperandInfo *OpInfo = TID.OpInfo;
+  const MCInstrDesc &MCID = ARMInsts[Opcode];
+  const MCOperandInfo *OpInfo = MCID.OpInfo;
   unsigned &OpIdx = NumOpsAdded;
 
   OpIdx = 0;
@@ -2073,8 +2082,8 @@ static bool DisassembleThumb2LdSt(bool Load, MCInst &MI, unsigned Opcode,
   // See, for example, A6.3.7 Load word: Table A6-18 Load word.
   if (Load && Rn == 15)
     return DisassembleThumb2Ldpci(MI, Opcode, insn, NumOps, NumOpsAdded, B);
-  const TargetInstrDesc &TID = ARMInsts[Opcode];
-  const TargetOperandInfo *OpInfo = TID.OpInfo;
+  const MCInstrDesc &MCID = ARMInsts[Opcode];
+  const MCOperandInfo *OpInfo = MCID.OpInfo;
   unsigned &OpIdx = NumOpsAdded;
 
   OpIdx = 0;
@@ -2085,7 +2094,7 @@ static bool DisassembleThumb2LdSt(bool Load, MCInst &MI, unsigned Opcode,
          "Expect >= 3 operands and first two as reg operands");
 
   bool ThreeReg = (OpInfo[2].RegClass > 0);
-  bool TIED_TO = ThreeReg && TID.getOperandConstraint(2, TOI::TIED_TO) != -1;
+  bool TIED_TO = ThreeReg && MCID.getOperandConstraint(2, MCOI::TIED_TO) != -1;
   bool Imm12 = !ThreeReg && slice(insn, 23, 23) == 1; // ARMInstrThumb2.td
 
   // Build the register operands, followed by the immediate.
@@ -2160,8 +2169,8 @@ static bool DisassembleThumb2LdSt(bool Load, MCInst &MI, unsigned Opcode,
 static bool DisassembleThumb2DPReg(MCInst &MI, unsigned Opcode, uint32_t insn,
     unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
 
-  const TargetInstrDesc &TID = ARMInsts[Opcode];
-  const TargetOperandInfo *OpInfo = TID.OpInfo;
+  const MCInstrDesc &MCID = ARMInsts[Opcode];
+  const MCOperandInfo *OpInfo = MCID.OpInfo;
   unsigned &OpIdx = NumOpsAdded;
 
   OpIdx = 0;
@@ -2214,7 +2223,7 @@ static bool DisassembleThumb2DPReg(MCInst &MI, unsigned Opcode, uint32_t insn,
 static bool DisassembleThumb2Mul(MCInst &MI, unsigned Opcode, uint32_t insn,
     unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
 
-  const TargetOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
+  const MCOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
 
   assert(NumOps >= 3 &&
          OpInfo[0].RegClass == ARM::rGPRRegClassID &&
@@ -2259,7 +2268,7 @@ static bool DisassembleThumb2Mul(MCInst &MI, unsigned Opcode, uint32_t insn,
 static bool DisassembleThumb2LongMul(MCInst &MI, unsigned Opcode, uint32_t insn,
     unsigned short NumOps, unsigned &NumOpsAdded, BO B) {
 
-  const TargetOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
+  const MCOperandInfo *OpInfo = ARMInsts[Opcode].OpInfo;
 
   assert(NumOps >= 3 &&
          OpInfo[0].RegClass == ARM::rGPRRegClassID &&

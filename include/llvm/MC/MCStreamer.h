@@ -14,11 +14,12 @@
 #ifndef LLVM_MC_MCSTREAMER_H
 #define LLVM_MC_MCSTREAMER_H
 
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/DataTypes.h"
 #include "llvm/MC/MCDirectives.h"
 #include "llvm/MC/MCDwarf.h"
 #include "llvm/MC/MCWin64EH.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 
 namespace llvm {
   class MCAsmInfo;
@@ -94,6 +95,10 @@ namespace llvm {
 
     const MCDwarfFrameInfo &getFrameInfo(unsigned i) {
       return FrameInfos[i];
+    }
+
+    ArrayRef<MCDwarfFrameInfo> getFrameInfos() {
+      return FrameInfos;
     }
 
     unsigned getNumW64UnwindInfos() {
@@ -460,7 +465,8 @@ namespace llvm {
 
     virtual void EmitDwarfAdvanceLineAddr(int64_t LineDelta,
                                           const MCSymbol *LastLabel,
-                                          const MCSymbol *Label) = 0;
+                                          const MCSymbol *Label,
+                                          unsigned PointerSize) = 0;
 
     virtual void EmitDwarfAdvanceFrameAddr(const MCSymbol *LastLabel,
                                            const MCSymbol *Label) {
@@ -469,6 +475,7 @@ namespace llvm {
     void EmitDwarfSetLineAddr(int64_t LineDelta, const MCSymbol *Label,
                               int PointerSize);
 
+    virtual void EmitCompactUnwindEncoding(uint32_t CompactUnwindEncoding);
     virtual void EmitCFISections(bool EH, bool Debug);
     virtual void EmitCFIStartProc();
     virtual void EmitCFIEndProc();
@@ -547,6 +554,9 @@ namespace llvm {
   ///
   /// \param ShowInst - Whether to show the MCInst representation inline with
   /// the assembly.
+  ///
+  /// \param DecodeLSDA - If true, emit comments that translates the LSDA into a
+  /// human readable format. Only usable with CFI.
   MCStreamer *createAsmStreamer(MCContext &Ctx, formatted_raw_ostream &OS,
                                 bool isVerboseAsm,
                                 bool useLoc,

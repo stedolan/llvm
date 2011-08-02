@@ -15,7 +15,6 @@
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetAsmInfo.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/Twine.h"
 #include <cstdlib>
@@ -81,7 +80,7 @@ void MCStreamer::EmitIntValue(uint64_t Value, unsigned Size,
   assert((isUIntN(8 * Size, Value) || isIntN(8 * Size, Value)) &&
          "Invalid size");
   char buf[8];
-  const bool isLittleEndian = Context.getTargetAsmInfo().isLittleEndian();
+  const bool isLittleEndian = Context.getAsmInfo().isLittleEndian();
   for (unsigned i = 0; i != Size; ++i) {
     unsigned index = isLittleEndian ? i : (Size - i - 1);
     buf[i] = uint8_t(Value >> (index * 8));
@@ -176,6 +175,12 @@ void MCStreamer::EmitLabel(MCSymbol *Symbol) {
   StringRef Prefix = getContext().getAsmInfo().getPrivateGlobalPrefix();
   if (!Symbol->getName().startswith(Prefix))
     LastNonPrivate = Symbol;
+}
+
+void MCStreamer::EmitCompactUnwindEncoding(uint32_t CompactUnwindEncoding) {
+  EnsureValidFrame();
+  MCDwarfFrameInfo *CurFrame = getCurrentFrameInfo();
+  CurFrame->CompactUnwindEncoding = CompactUnwindEncoding;
 }
 
 void MCStreamer::EmitCFISections(bool EH, bool Debug) {

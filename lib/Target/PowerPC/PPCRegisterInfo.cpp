@@ -28,7 +28,6 @@
 #include "llvm/CodeGen/MachineModuleInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
-#include "llvm/CodeGen/MachineLocation.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/RegisterScavenging.h"
 #include "llvm/Target/TargetFrameLowering.h"
@@ -43,6 +42,9 @@
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include <cstdlib>
+
+#define GET_REGINFO_TARGET_DESC
+#include "PPCGenRegisterInfo.inc"
 
 // FIXME (64-bit): Eventually enable by default.
 namespace llvm {
@@ -110,7 +112,9 @@ unsigned PPCRegisterInfo::getRegisterNumbering(unsigned RegEnum) {
 
 PPCRegisterInfo::PPCRegisterInfo(const PPCSubtarget &ST,
                                  const TargetInstrInfo &tii)
-  : PPCGenRegisterInfo(PPC::ADJCALLSTACKDOWN, PPC::ADJCALLSTACKUP),
+  : PPCGenRegisterInfo(ST.isPPC64() ? PPC::LR8 : PPC::LR,
+                       ST.isPPC64() ? 0 : 1,
+                       ST.isPPC64() ? 0 : 1),
     Subtarget(ST), TII(tii) {
   ImmToIdxMap[PPC::LD]   = PPC::LDX;    ImmToIdxMap[PPC::STD]  = PPC::STDX;
   ImmToIdxMap[PPC::LBZ]  = PPC::LBZX;   ImmToIdxMap[PPC::STB]  = PPC::STBX;
@@ -504,6 +508,7 @@ void PPCRegisterInfo::lowerCRSpilling(MachineBasicBlock::iterator II,
   const TargetRegisterClass *RC = Subtarget.isPPC64() ? G8RC : GPRC;
   unsigned Reg = findScratchRegister(II, RS, RC, SPAdj);
   unsigned SrcReg = MI.getOperand(0).getReg();
+  bool LP64 = Subtarget.isPPC64();
 
   // We need to store the CR in the low 4-bits of the saved value. First, issue
   // an MFCRpsued to save all of the CRBits and, if needed, kill the SrcReg.
@@ -520,7 +525,7 @@ void PPCRegisterInfo::lowerCRSpilling(MachineBasicBlock::iterator II,
       .addImm(0)
       .addImm(31);
 
-  addFrameReference(BuildMI(MBB, II, dl, TII.get(PPC::STW))
+  addFrameReference(BuildMI(MBB, II, dl, TII.get(LP64 ? PPC::STW8 : PPC::STW))
                     .addReg(Reg, getKillRegState(MI.getOperand(1).getImm())),
                     FrameIndex);
 
@@ -665,10 +670,6 @@ PPCRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   MI.getOperand(OperandBase + 1).ChangeToRegister(SReg, false);
 }
 
-unsigned PPCRegisterInfo::getRARegister() const {
-  return !Subtarget.isPPC64() ? PPC::LR : PPC::LR8;
-}
-
 unsigned PPCRegisterInfo::getFrameRegister(const MachineFunction &MF) const {
   const TargetFrameLowering *TFI = MF.getTarget().getFrameLowering();
 
@@ -685,29 +686,3 @@ unsigned PPCRegisterInfo::getEHExceptionRegister() const {
 unsigned PPCRegisterInfo::getEHHandlerRegister() const {
   return !Subtarget.isPPC64() ? PPC::R4 : PPC::X4;
 }
-
-/// DWARFFlavour - Flavour of dwarf regnumbers
-///
-namespace DWARFFlavour {
-  enum {
-    PPC64 = 0, PPC32 = 1
-  };
-}
-
-int PPCRegisterInfo::getDwarfRegNum(unsigned RegNum, bool isEH) const {
-  // FIXME: Most probably dwarf numbers differs for Linux and Darwin
-  unsigned Flavour = Subtarget.isPPC64() ?
-    DWARFFlavour::PPC64 : DWARFFlavour::PPC32;
-
-  return PPCGenRegisterInfo::getDwarfRegNumFull(RegNum, Flavour);
-}
-
-int PPCRegisterInfo::getLLVMRegNum(unsigned RegNum, bool isEH) const {
-  // FIXME: Most probably dwarf numbers differs for Linux and Darwin
-  unsigned Flavour = Subtarget.isPPC64() ?
-    DWARFFlavour::PPC64 : DWARFFlavour::PPC32;
-
-  return PPCGenRegisterInfo::getLLVMRegNumFull(RegNum, Flavour);
-}
-
-#include "PPCGenRegisterInfo.inc"

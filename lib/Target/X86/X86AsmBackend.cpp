@@ -7,7 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Target/TargetAsmBackend.h"
+#include "llvm/MC/TargetAsmBackend.h"
 #include "X86.h"
 #include "X86FixupKinds.h"
 #include "llvm/ADT/Twine.h"
@@ -26,7 +26,6 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetRegistry.h"
-#include "llvm/Target/TargetAsmBackend.h"
 using namespace llvm;
 
 // Option to allow disabling arithmetic relaxation to workaround PR9807, which
@@ -194,6 +193,9 @@ static unsigned getRelaxedOpcodeArith(unsigned Op) {
 
     // PUSH
   case X86::PUSHi8: return X86::PUSHi32;
+  case X86::PUSHi16: return X86::PUSHi32;
+  case X86::PUSH64i8: return X86::PUSH64i32;
+  case X86::PUSH64i16: return X86::PUSH64i32;
   }
 }
 

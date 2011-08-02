@@ -33,7 +33,6 @@
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/Target/Mangler.h"
-#include "llvm/Target/TargetAsmInfo.h"
 #include "llvm/Target/TargetData.h"
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetLowering.h"
@@ -575,6 +574,8 @@ static bool EmitDebugValueComment(const MachineInstr *MI, AsmPrinter &AP) {
     }
   } else if (MI->getOperand(0).isImm()) {
     OS << MI->getOperand(0).getImm();
+  } else if (MI->getOperand(0).isCImm()) {
+    MI->getOperand(0).getCImm()->getValue().print(OS, false /*isSigned*/);
   } else {
     assert(MI->getOperand(0).isReg() && "Unknown operand type");
     if (MI->getOperand(0).getReg() == 0) {
@@ -617,6 +618,9 @@ void AsmPrinter::emitPrologLabel(const MachineInstr &MI) {
 
   if (needsCFIMoves() == CFI_M_None)
     return;
+
+  if (MMI->getCompactUnwindEncoding() != 0)
+    OutStreamer.EmitCompactUnwindEncoding(MMI->getCompactUnwindEncoding());
 
   MachineModuleInfo &MMI = MF->getMMI();
   std::vector<MachineMove> &Moves = MMI.getFrameMoves();
@@ -1007,7 +1011,7 @@ void AsmPrinter::EmitConstantPool() {
       unsigned NewOffset = (Offset + AlignMask) & ~AlignMask;
       OutStreamer.EmitFill(NewOffset - Offset, 0/*fillval*/, 0/*addrspace*/);
 
-      const Type *Ty = CPE.getType();
+      Type *Ty = CPE.getType();
       Offset = NewOffset + TM.getTargetData()->getTypeAllocSize(Ty);
       OutStreamer.EmitLabel(GetCPISymbol(CPI));
 
@@ -1211,9 +1215,9 @@ bool AsmPrinter::EmitSpecialLLVMGlobal(const GlobalVariable *GV) {
 /// EmitLLVMUsedList - For targets that define a MAI::UsedDirective, mark each
 /// global in the specified llvm.used list for which emitUsedDirectiveFor
 /// is true, as being used with this directive.
-void AsmPrinter::EmitLLVMUsedList(Constant *List) {
+void AsmPrinter::EmitLLVMUsedList(const Constant *List) {
   // Should be an array of 'i8*'.
-  ConstantArray *InitList = dyn_cast<ConstantArray>(List);
+  const ConstantArray *InitList = dyn_cast<ConstantArray>(List);
   if (InitList == 0) return;
 
   for (unsigned i = 0, e = InitList->getNumOperands(); i != e; ++i) {
@@ -1226,11 +1230,11 @@ void AsmPrinter::EmitLLVMUsedList(Constant *List) {
 
 /// EmitXXStructorList - Emit the ctor or dtor list.  This just prints out the
 /// function pointers, ignoring the init priority.
-void AsmPrinter::EmitXXStructorList(Constant *List) {
+void AsmPrinter::EmitXXStructorList(const Constant *List) {
   // Should be an array of '{ int, void ()* }' structs.  The first value is the
   // init priority, which we ignore.
   if (!isa<ConstantArray>(List)) return;
-  ConstantArray *InitList = cast<ConstantArray>(List);
+  const ConstantArray *InitList = cast<ConstantArray>(List);
   for (unsigned i = 0, e = InitList->getNumOperands(); i != e; ++i)
     if (ConstantStruct *CS = dyn_cast<ConstantStruct>(InitList->getOperand(i))){
       if (CS->getNumOperands() != 2) return;  // Not array of 2-element structs.
@@ -1404,8 +1408,7 @@ static const MCExpr *LowerConstant(const Constant *CV, AsmPrinter &AP) {
     // Generate a symbolic expression for the byte address
     const Constant *PtrVal = CE->getOperand(0);
     SmallVector<Value*, 8> IdxVec(CE->op_begin()+1, CE->op_end());
-    int64_t Offset = TD.getIndexedOffset(PtrVal->getType(), &IdxVec[0],
-                                         IdxVec.size());
+    int64_t Offset = TD.getIndexedOffset(PtrVal->getType(), IdxVec);
 
     const MCExpr *Base = LowerConstant(CE->getOperand(0), AP);
     if (Offset == 0)
@@ -1445,7 +1448,7 @@ static const MCExpr *LowerConstant(const Constant *CV, AsmPrinter &AP) {
     // Support only foldable casts to/from pointers that can be eliminated by
     // changing the pointer to the appropriately sized integer type.
     Constant *Op = CE->getOperand(0);
-    const Type *Ty = CE->getType();
+    Type *Ty = CE->getType();
 
     const MCExpr *OpExpr = LowerConstant(Op, AP);
 
@@ -1516,6 +1519,13 @@ static void EmitGlobalConstantVector(const ConstantVector *CV,
                                      unsigned AddrSpace, AsmPrinter &AP) {
   for (unsigned i = 0, e = CV->getType()->getNumElements(); i != e; ++i)
     EmitGlobalConstantImpl(CV->getOperand(i), AddrSpace, AP);
+
+  const TargetData &TD = *AP.TM.getTargetData();
+  unsigned Size = TD.getTypeAllocSize(CV->getType());
+  unsigned EmittedSize = TD.getTypeAllocSize(CV->getType()->getElementType()) *
+                         CV->getType()->getNumElements();
+  if (unsigned Padding = Size - EmittedSize)
+    AP.OutStreamer.EmitZeros(Padding, AddrSpace);
 }
 
 static void EmitGlobalConstantStruct(const ConstantStruct *CS,
@@ -1934,19 +1944,28 @@ isBlockOnlyReachableByFallthrough(const MachineBasicBlock *MBB) const {
   if (Pred->empty())
     return true;
 
-  // Otherwise, ask the backend.
-  const TargetInstrInfo *TII = MF->getTarget().getInstrInfo();
-  MachineBasicBlock *PredTBB = NULL, *PredFBB = NULL;
-  SmallVector<MachineOperand, 4> PredCond;
-  if (TII->AnalyzeBranch(*Pred, PredTBB, PredFBB, PredCond))
-    return false;
+  // Check the terminators in the previous blocks
+  for (MachineBasicBlock::iterator II = Pred->getFirstTerminator(),
+         IE = Pred->end(); II != IE; ++II) {
+    MachineInstr &MI = *II;
 
-  if (PredTBB == MBB || PredFBB == MBB)
-    return false;
+    // If it is not a simple branch, we are in a table somewhere.
+    if (!MI.getDesc().isBranch() || MI.getDesc().isIndirectBranch())
+      return false;
 
-  // This is a fall through if there is no conditions in the bb
-  // or if there is no explicit false branch.
-  return PredCond.empty() || !PredFBB;
+    // If we are the operands of one of the branches, this is not
+    // a fall through.
+    for (MachineInstr::mop_iterator OI = MI.operands_begin(),
+           OE = MI.operands_end(); OI != OE; ++OI) {
+      const MachineOperand& OP = *OI;
+      if (OP.isJTI())
+        return false;
+      if (OP.isMBB() && OP.getMBB() == MBB)
+        return false;
+    }
+  }
+
+  return true;
 }
 
 

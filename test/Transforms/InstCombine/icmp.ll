@@ -531,3 +531,31 @@ define i1 @test54(i8 %a) nounwind {
   %ret = icmp eq i32 %and, 128
   ret i1 %ret
 }
+
+; CHECK: @test55
+; CHECK-NEXT: icmp eq i32 %a, -123
+define i1 @test55(i32 %a) {
+  %sub = sub i32 0, %a
+  %cmp = icmp eq i32 %sub, 123
+  ret i1 %cmp
+}
+
+; CHECK: @test56
+; CHECK-NEXT: icmp eq i32 %a, -113
+define i1 @test56(i32 %a) {
+  %sub = sub i32 10, %a
+  %cmp = icmp eq i32 %sub, 123
+  ret i1 %cmp
+}
+
+; PR10267 Don't make icmps more expensive when no other inst is subsumed.
+declare void @foo(i32)
+; CHECK: @test57
+; CHECK: %and = and i32 %a, -2
+; CHECK: %cmp = icmp ne i32 %and, 0
+define i1 @test57(i32 %a) {
+  %and = and i32 %a, -2
+  %cmp = icmp ne i32 %and, 0
+  call void @foo(i32 %and)
+  ret i1 %cmp
+}

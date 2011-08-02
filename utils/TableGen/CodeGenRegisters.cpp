@@ -14,6 +14,7 @@
 
 #include "CodeGenRegisters.h"
 #include "CodeGenTarget.h"
+#include "Error.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 
@@ -151,10 +152,110 @@ CodeGenRegister::addSubRegsPreOrder(SetVector<CodeGenRegister*> &OSet) const {
 }
 
 //===----------------------------------------------------------------------===//
+//                               RegisterTuples
+//===----------------------------------------------------------------------===//
+
+// A RegisterTuples def is used to generate pseudo-registers from lists of
+// sub-registers. We provide a SetTheory expander class that returns the new
+// registers.
+namespace {
+struct TupleExpander : SetTheory::Expander {
+  void expand(SetTheory &ST, Record *Def, SetTheory::RecSet &Elts) {
+    std::vector<Record*> Indices = Def->getValueAsListOfDefs("SubRegIndices");
+    unsigned Dim = Indices.size();
+    ListInit *SubRegs = Def->getValueAsListInit("SubRegs");
+    if (Dim != SubRegs->getSize())
+      throw TGError(Def->getLoc(), "SubRegIndices and SubRegs size mismatch");
+    if (Dim < 2)
+      throw TGError(Def->getLoc(), "Tuples must have at least 2 sub-registers");
+
+    // Evaluate the sub-register lists to be zipped.
+    unsigned Length = ~0u;
+    SmallVector<SetTheory::RecSet, 4> Lists(Dim);
+    for (unsigned i = 0; i != Dim; ++i) {
+      ST.evaluate(SubRegs->getElement(i), Lists[i]);
+      Length = std::min(Length, unsigned(Lists[i].size()));
+    }
+
+    if (Length == 0)
+      return;
+
+    // Precompute some types.
+    Record *RegisterCl = Def->getRecords().getClass("Register");
+    RecTy *RegisterRecTy = RecordRecTy::get(RegisterCl);
+    StringInit *BlankName = new StringInit("");
+
+    // Zip them up.
+    for (unsigned n = 0; n != Length; ++n) {
+      std::string Name;
+      Record *Proto = Lists[0][n];
+      std::vector<Init*> Tuple;
+      unsigned CostPerUse = 0;
+      for (unsigned i = 0; i != Dim; ++i) {
+        Record *Reg = Lists[i][n];
+        if (i) Name += '_';
+        Name += Reg->getName();
+        Tuple.push_back(DefInit::get(Reg));
+        CostPerUse = std::max(CostPerUse,
+                              unsigned(Reg->getValueAsInt("CostPerUse")));
+      }
+
+      // Create a new Record representing the synthesized register. This record
+      // is only for consumption by CodeGenRegister, it is not added to the
+      // RecordKeeper.
+      Record *NewReg = new Record(Name, Def->getLoc(), Def->getRecords());
+      Elts.insert(NewReg);
+
+      // Copy Proto super-classes.
+      for (unsigned i = 0, e = Proto->getSuperClasses().size(); i != e; ++i)
+        NewReg->addSuperClass(Proto->getSuperClasses()[i]);
+
+      // Copy Proto fields.
+      for (unsigned i = 0, e = Proto->getValues().size(); i != e; ++i) {
+        RecordVal RV = Proto->getValues()[i];
+
+        // Replace the sub-register list with Tuple.
+        if (RV.getName() == "SubRegs")
+          RV.setValue(new ListInit(Tuple, RegisterRecTy));
+
+        // Provide a blank AsmName. MC hacks are required anyway.
+        if (RV.getName() == "AsmName")
+          RV.setValue(BlankName);
+
+        // CostPerUse is aggregated from all Tuple members.
+        if (RV.getName() == "CostPerUse")
+          RV.setValue(new IntInit(CostPerUse));
+
+        // Copy fields from the RegisterTuples def.
+        if (RV.getName() == "SubRegIndices" ||
+            RV.getName() == "CompositeIndices") {
+          NewReg->addValue(*Def->getValue(RV.getName()));
+          continue;
+        }
+
+        // Some fields get their default uninitialized value.
+        if (RV.getName() == "DwarfNumbers" ||
+            RV.getName() == "DwarfAlias" ||
+            RV.getName() == "Aliases") {
+          if (const RecordVal *DefRV = RegisterCl->getValue(RV.getName()))
+            NewReg->addValue(*DefRV);
+          continue;
+        }
+
+        // Everything else is copied from Proto.
+        NewReg->addValue(RV);
+      }
+    }
+  }
+};
+}
+
+//===----------------------------------------------------------------------===//
 //                            CodeGenRegisterClass
 //===----------------------------------------------------------------------===//
 
-CodeGenRegisterClass::CodeGenRegisterClass(Record *R) : TheDef(R) {
+CodeGenRegisterClass::CodeGenRegisterClass(CodeGenRegBank &RegBank, Record *R)
+  : TheDef(R) {
   // Rename anonymous register classes.
   if (R->getName().size() > 9 && R->getName()[9] == '.') {
     static unsigned AnonCounter = 0;
@@ -171,13 +272,26 @@ CodeGenRegisterClass::CodeGenRegisterClass(Record *R) : TheDef(R) {
   }
   assert(!VTs.empty() && "RegisterClass must contain at least one ValueType!");
 
-  std::vector<Record*> RegList = R->getValueAsListOfDefs("MemberList");
-  for (unsigned i = 0, e = RegList.size(); i != e; ++i) {
-    Record *Reg = RegList[i];
-    if (!Reg->isSubClassOf("Register"))
-      throw "Register Class member '" + Reg->getName() +
-            "' does not derive from the Register class!";
-    Elements.push_back(Reg);
+  // Default allocation order always contains all registers.
+  Elements = RegBank.getSets().expand(R);
+  for (unsigned i = 0, e = Elements->size(); i != e; ++i)
+    Members.insert(RegBank.getReg((*Elements)[i]));
+
+  // Alternative allocation orders may be subsets.
+  ListInit *Alts = R->getValueAsListInit("AltOrders");
+  AltOrders.resize(Alts->size());
+  SetTheory::RecSet Order;
+  for (unsigned i = 0, e = Alts->size(); i != e; ++i) {
+    RegBank.getSets().evaluate(Alts->getElement(i), Order);
+    AltOrders[i].append(Order.begin(), Order.end());
+    // Verify that all altorder members are regclass members.
+    while (!Order.empty()) {
+      CodeGenRegister *Reg = RegBank.getReg(Order.back());
+      Order.pop_back();
+      if (!contains(Reg))
+        throw TGError(R->getLoc(), " AltOrder register " + Reg->getName() +
+                      " is not a class member");
+    }
   }
 
   // SubRegClasses is a list<dag> containing (RC, subregindex, ...) dags.
@@ -211,8 +325,28 @@ CodeGenRegisterClass::CodeGenRegisterClass(Record *R) : TheDef(R) {
   SpillAlignment = R->getValueAsInt("Alignment");
   CopyCost = R->getValueAsInt("CopyCost");
   Allocatable = R->getValueAsBit("isAllocatable");
-  MethodBodies = R->getValueAsCode("MethodBodies");
-  MethodProtos = R->getValueAsCode("MethodProtos");
+  AltOrderSelect = R->getValueAsCode("AltOrderSelect");
+}
+
+bool CodeGenRegisterClass::contains(const CodeGenRegister *Reg) const {
+  return Members.count(Reg);
+}
+
+// Returns true if RC is a strict subclass.
+// RC is a sub-class of this class if it is a valid replacement for any
+// instruction operand where a register of this classis required. It must
+// satisfy these conditions:
+//
+// 1. All RC registers are also in this.
+// 2. The RC spill size must not be smaller than our spill size.
+// 3. RC spill alignment must be compatible with ours.
+//
+bool CodeGenRegisterClass::hasSubClass(const CodeGenRegisterClass *RC) const {
+  return SpillAlignment && RC->SpillAlignment % SpillAlignment == 0 &&
+    SpillSize <= RC->SpillSize &&
+    std::includes(Members.begin(), Members.end(),
+                  RC->Members.begin(), RC->Members.end(),
+                  CodeGenRegister::Less());
 }
 
 const std::string &CodeGenRegisterClass::getName() const {
@@ -224,6 +358,10 @@ const std::string &CodeGenRegisterClass::getName() const {
 //===----------------------------------------------------------------------===//
 
 CodeGenRegBank::CodeGenRegBank(RecordKeeper &Records) : Records(Records) {
+  // Configure register Sets to understand register classes and tuples.
+  Sets.addFieldExpander("RegisterClass", "MemberList");
+  Sets.addExpander("RegisterTuples", new TupleExpander());
+
   // Read in the user-defined (named) sub-register indices.
   // More indices will be synthesized later.
   SubRegIndices = Records.getAllDerivedDefinitions("SubRegIndex");
@@ -236,18 +374,45 @@ CodeGenRegBank::CodeGenRegBank(RecordKeeper &Records) : Records(Records) {
   Registers.reserve(Regs.size());
   // Assign the enumeration values.
   for (unsigned i = 0, e = Regs.size(); i != e; ++i)
-    Registers.push_back(CodeGenRegister(Regs[i], i + 1));
+    getReg(Regs[i]);
+
+  // Expand tuples and number the new registers.
+  std::vector<Record*> Tups =
+    Records.getAllDerivedDefinitions("RegisterTuples");
+  for (unsigned i = 0, e = Tups.size(); i != e; ++i) {
+    const std::vector<Record*> *TupRegs = Sets.expand(Tups[i]);
+    for (unsigned j = 0, je = TupRegs->size(); j != je; ++j)
+      getReg((*TupRegs)[j]);
+  }
+
+  // Read in register class definitions.
+  std::vector<Record*> RCs = Records.getAllDerivedDefinitions("RegisterClass");
+  if (RCs.empty())
+    throw std::string("No 'RegisterClass' subclasses defined!");
+
+  RegClasses.reserve(RCs.size());
+  for (unsigned i = 0, e = RCs.size(); i != e; ++i)
+    RegClasses.push_back(CodeGenRegisterClass(*this, RCs[i]));
 }
 
 CodeGenRegister *CodeGenRegBank::getReg(Record *Def) {
-  if (Def2Reg.empty())
-    for (unsigned i = 0, e = Registers.size(); i != e; ++i)
-      Def2Reg[Registers[i].TheDef] = &Registers[i];
-
-  if (CodeGenRegister *Reg = Def2Reg[Def])
+  CodeGenRegister *&Reg = Def2Reg[Def];
+  if (Reg)
     return Reg;
+  Reg = new CodeGenRegister(Def, Registers.size() + 1);
+  Registers.push_back(Reg);
+  return Reg;
+}
 
-  throw TGError(Def->getLoc(), "Not a known Register!");
+CodeGenRegisterClass *CodeGenRegBank::getRegClass(Record *Def) {
+  if (Def2RC.empty())
+    for (unsigned i = 0, e = RegClasses.size(); i != e; ++i)
+      Def2RC[RegClasses[i].TheDef] = &RegClasses[i];
+
+  if (CodeGenRegisterClass *RC = Def2RC[Def])
+    return RC;
+
+  throw TGError(Def->getLoc(), "Not a known RegisterClass!");
 }
 
 Record *CodeGenRegBank::getCompositeSubRegIndex(Record *A, Record *B,
@@ -276,10 +441,10 @@ void CodeGenRegBank::computeComposites() {
   // Precompute all sub-register maps. This will create Composite entries for
   // all inferred sub-register indices.
   for (unsigned i = 0, e = Registers.size(); i != e; ++i)
-    Registers[i].getSubRegs(*this);
+    Registers[i]->getSubRegs(*this);
 
   for (unsigned i = 0, e = Registers.size(); i != e; ++i) {
-    CodeGenRegister *Reg1 = &Registers[i];
+    CodeGenRegister *Reg1 = Registers[i];
     const CodeGenRegister::SubRegMap &SRM1 = Reg1->getSubRegs();
     for (CodeGenRegister::SubRegMap::const_iterator i1 = SRM1.begin(),
          e1 = SRM1.end(); i1 != e1; ++i1) {
@@ -365,7 +530,7 @@ computeOverlaps(std::map<const CodeGenRegister*, CodeGenRegister::Set> &Map) {
 
   // Collect overlaps that don't follow from rule 2.
   for (unsigned i = 0, e = Registers.size(); i != e; ++i) {
-    CodeGenRegister *Reg = &Registers[i];
+    CodeGenRegister *Reg = Registers[i];
     CodeGenRegister::Set &Overlaps = Map[Reg];
 
     // Reg overlaps itself.
@@ -391,7 +556,7 @@ computeOverlaps(std::map<const CodeGenRegister*, CodeGenRegister::Set> &Map) {
 
   // Apply rule 2. and inherit all sub-register overlaps.
   for (unsigned i = 0, e = Registers.size(); i != e; ++i) {
-    CodeGenRegister *Reg = &Registers[i];
+    CodeGenRegister *Reg = Registers[i];
     CodeGenRegister::Set &Overlaps = Map[Reg];
     const CodeGenRegister::SubRegMap &SRM = Reg->getSubRegs();
     for (CodeGenRegister::SubRegMap::const_iterator i2 = SRM.begin(),
@@ -406,3 +571,49 @@ void CodeGenRegBank::computeDerivedInfo() {
   computeComposites();
 }
 
+/// getRegisterClassForRegister - Find the register class that contains the
+/// specified physical register.  If the register is not in a register class,
+/// return null. If the register is in multiple classes, and the classes have a
+/// superset-subset relationship and the same set of types, return the
+/// superclass.  Otherwise return null.
+const CodeGenRegisterClass*
+CodeGenRegBank::getRegClassForRegister(Record *R) {
+  const CodeGenRegister *Reg = getReg(R);
+  const std::vector<CodeGenRegisterClass> &RCs = getRegClasses();
+  const CodeGenRegisterClass *FoundRC = 0;
+  for (unsigned i = 0, e = RCs.size(); i != e; ++i) {
+    const CodeGenRegisterClass &RC = RCs[i];
+    if (!RC.contains(Reg))
+      continue;
+
+    // If this is the first class that contains the register,
+    // make a note of it and go on to the next class.
+    if (!FoundRC) {
+      FoundRC = &RC;
+      continue;
+    }
+
+    // If a register's classes have different types, return null.
+    if (RC.getValueTypes() != FoundRC->getValueTypes())
+      return 0;
+
+    // Check to see if the previously found class that contains
+    // the register is a subclass of the current class. If so,
+    // prefer the superclass.
+    if (RC.hasSubClass(FoundRC)) {
+      FoundRC = &RC;
+      continue;
+    }
+
+    // Check to see if the previously found class that contains
+    // the register is a superclass of the current class. If so,
+    // prefer the superclass.
+    if (FoundRC->hasSubClass(&RC))
+      continue;
+
+    // Multiple classes, and neither is a superclass of the other.
+    // Return null.
+    return 0;
+  }
+  return FoundRC;
+}

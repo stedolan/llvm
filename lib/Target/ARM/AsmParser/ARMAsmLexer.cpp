@@ -13,9 +13,9 @@
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCParser/MCAsmLexer.h"
 #include "llvm/MC/MCParser/MCParsedAsmOperand.h"
+#include "llvm/MC/TargetAsmLexer.h"
 
-#include "llvm/Target/TargetAsmLexer.h"
-#include "llvm/Target/TargetMachine.h"
+#include "llvm/Target/TargetMachine.h"  // FIXME
 #include "llvm/Target/TargetRegistry.h"
 
 #include "llvm/ADT/OwningPtr.h"
@@ -87,8 +87,9 @@ public:
     : ARMBaseAsmLexer(T, MAI) {
     std::string tripleString("arm-unknown-unknown");
     std::string featureString;
+    std::string CPU;
     OwningPtr<const TargetMachine>
-      targetMachine(T.createTargetMachine(tripleString, featureString));
+      targetMachine(T.createTargetMachine(tripleString, CPU, featureString));
     InitRegisterMap(targetMachine->getRegisterInfo());
   }
 };
@@ -99,8 +100,9 @@ public:
     : ARMBaseAsmLexer(T, MAI) {
     std::string tripleString("thumb-unknown-unknown");
     std::string featureString;
+    std::string CPU;
     OwningPtr<const TargetMachine>
-      targetMachine(T.createTargetMachine(tripleString, featureString));
+      targetMachine(T.createTargetMachine(tripleString, CPU, featureString));
     InitRegisterMap(targetMachine->getRegisterInfo());
   }
 };

@@ -15,28 +15,27 @@
 #ifndef TARGET_ARM_H
 #define TARGET_ARM_H
 
-#include "ARMBaseInfo.h"
+#include "MCTargetDesc/ARMBaseInfo.h"
+#include "MCTargetDesc/ARMMCTargetDesc.h"
+#include "llvm/Support/DataTypes.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Target/TargetMachine.h"
 #include <cassert>
 
 namespace llvm {
 
+class ARMAsmPrinter;
 class ARMBaseTargetMachine;
 class FunctionPass;
 class JITCodeEmitter;
-class formatted_raw_ostream;
-class MCCodeEmitter;
-class TargetAsmBackend;
 class MachineInstr;
-class ARMAsmPrinter;
+class MCCodeEmitter;
 class MCInst;
-
-MCCodeEmitter *createARMMCCodeEmitter(const Target &,
-                                      TargetMachine &TM,
-                                      MCContext &Ctx);
-
-TargetAsmBackend *createARMAsmBackend(const Target &, const std::string &);
+class MCInstrInfo;
+class MCObjectWriter;
+class MCSubtargetInfo;
+class TargetAsmBackend;
+class formatted_raw_ostream;
 
 FunctionPass *createARMISelDag(ARMBaseTargetMachine &TM,
                                CodeGenOpt::Level OptLevel);
@@ -52,8 +51,6 @@ FunctionPass *createNEONMoveFixPass();
 FunctionPass *createMLxExpansionPass();
 FunctionPass *createThumb2ITBlockPass();
 FunctionPass *createThumb2SizeReductionPass();
-
-extern Target TheARMTarget, TheThumbTarget;
 
 void LowerARMMachineInstrToMCInst(const MachineInstr *MI, MCInst &OutMI,
                                   ARMAsmPrinter &AP);

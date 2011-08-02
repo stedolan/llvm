@@ -79,7 +79,11 @@ namespace llvm {
       BuildPairF64,
       ExtractElementF64,
 
-      WrapperPIC
+      WrapperPIC,
+
+      DynAlloc,
+
+      Sync
     };
   }
 
@@ -126,6 +130,7 @@ namespace llvm {
     SDValue LowerVASTART(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerFCOPYSIGN(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerFRAMEADDR(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerMEMBARRIER(SDValue Op, SelectionDAG& DAG) const;
 
     virtual SDValue
       LowerFormalArguments(SDValue Chain,
@@ -165,10 +170,6 @@ namespace llvm {
 
     std::pair<unsigned, const TargetRegisterClass*>
               getRegForInlineAsmConstraint(const std::string &Constraint,
-              EVT VT) const;
-
-    std::vector<unsigned>
-    getRegClassForInlineAsmConstraint(const std::string &Constraint,
               EVT VT) const;
 
     virtual bool isOffsetFoldingLegal(const GlobalAddressSDNode *GA) const;

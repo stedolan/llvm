@@ -87,18 +87,14 @@ unsigned LLVMPreferredAlignmentOfGlobal(LLVMTargetDataRef TD,
 
 unsigned LLVMElementAtOffset(LLVMTargetDataRef TD, LLVMTypeRef StructTy,
                              unsigned long long Offset) {
-  const StructType *STy = unwrap<StructType>(StructTy);
+  StructType *STy = unwrap<StructType>(StructTy);
   return unwrap(TD)->getStructLayout(STy)->getElementContainingOffset(Offset);
 }
 
 unsigned long long LLVMOffsetOfElement(LLVMTargetDataRef TD, LLVMTypeRef StructTy,
                                        unsigned Element) {
-  const StructType *STy = unwrap<StructType>(StructTy);
+  StructType *STy = unwrap<StructType>(StructTy);
   return unwrap(TD)->getStructLayout(STy)->getElementOffset(Element);
-}
-
-void LLVMInvalidateStructLayout(LLVMTargetDataRef TD, LLVMTypeRef StructTy) {
-  unwrap(TD)->InvalidateStructLayoutInfo(unwrap<StructType>(StructTy));
 }
 
 void LLVMDisposeTargetData(LLVMTargetDataRef TD) {

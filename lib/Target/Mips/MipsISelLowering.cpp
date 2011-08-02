@@ -23,6 +23,7 @@
 #include "llvm/GlobalVariable.h"
 #include "llvm/Intrinsics.h"
 #include "llvm/CallingConv.h"
+#include "InstPrinter/MipsInstPrinter.h"
 #include "llvm/CodeGen/CallingConvLower.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
@@ -59,6 +60,8 @@ const char *MipsTargetLowering::getTargetNodeName(unsigned Opcode) const {
   case MipsISD::BuildPairF64:      return "MipsISD::BuildPairF64";
   case MipsISD::ExtractElementF64: return "MipsISD::ExtractElementF64";
   case MipsISD::WrapperPIC:        return "MipsISD::WrapperPIC";
+  case MipsISD::DynAlloc:          return "MipsISD::DynAlloc";
+  case MipsISD::Sync:              return "MipsISD::Sync";
   default:                         return NULL;
   }
 }
@@ -144,6 +147,8 @@ MipsTargetLowering(MipsTargetMachine &TM)
   setOperationAction(ISD::FLOG2,             MVT::f32,   Expand);
   setOperationAction(ISD::FLOG10,            MVT::f32,   Expand);
   setOperationAction(ISD::FEXP,              MVT::f32,   Expand);
+  setOperationAction(ISD::FMA,               MVT::f32,   Expand);
+  setOperationAction(ISD::FMA,               MVT::f64,   Expand);
 
   setOperationAction(ISD::EXCEPTIONADDR,     MVT::i32, Expand);
   setOperationAction(ISD::EHSELECTION,       MVT::i32, Expand);
@@ -155,7 +160,7 @@ MipsTargetLowering(MipsTargetMachine &TM)
   // Use the default for now
   setOperationAction(ISD::STACKSAVE,         MVT::Other, Expand);
   setOperationAction(ISD::STACKRESTORE,      MVT::Other, Expand);
-  setOperationAction(ISD::MEMBARRIER,        MVT::Other, Expand);
+  setOperationAction(ISD::MEMBARRIER,        MVT::Other, Custom);
 
   if (Subtarget->isSingleFloat())
     setOperationAction(ISD::SELECT_CC, MVT::f64, Expand);
@@ -523,6 +528,7 @@ LowerOperation(SDValue Op, SelectionDAG &DAG) const
     case ISD::VASTART:            return LowerVASTART(Op, DAG);
     case ISD::FCOPYSIGN:          return LowerFCOPYSIGN(Op, DAG);
     case ISD::FRAMEADDR:          return LowerFRAMEADDR(Op, DAG);
+    case ISD::MEMBARRIER:         return LowerMEMBARRIER(Op, DAG);
   }
   return SDValue();
 }
@@ -729,13 +735,13 @@ MipsTargetLowering::EmitAtomicBinary(MachineInstr *MI, MachineBasicBlock *BB,
   const TargetInstrInfo *TII = getTargetMachine().getInstrInfo();
   DebugLoc dl = MI->getDebugLoc();
 
-  unsigned Dest = MI->getOperand(0).getReg();
+  unsigned OldVal = MI->getOperand(0).getReg();
   unsigned Ptr = MI->getOperand(1).getReg();
   unsigned Incr = MI->getOperand(2).getReg();
 
-  unsigned Oldval = RegInfo.createVirtualRegister(RC);
-  unsigned Tmp1 = RegInfo.createVirtualRegister(RC);
-  unsigned Tmp2 = RegInfo.createVirtualRegister(RC);
+  unsigned StoreVal = RegInfo.createVirtualRegister(RC);
+  unsigned AndRes = RegInfo.createVirtualRegister(RC);
+  unsigned Success = RegInfo.createVirtualRegister(RC);
 
   // insert new blocks after the current block
   const BasicBlock *LLVM_BB = BB->getBasicBlock();
@@ -754,61 +760,38 @@ MipsTargetLowering::EmitAtomicBinary(MachineInstr *MI, MachineBasicBlock *BB,
 
   //  thisMBB:
   //    ...
-  //    sw incr, fi(sp)           // store incr to stack (when BinOpcode == 0)
   //    fallthrough --> loopMBB
-
-  // Note: for atomic.swap (when BinOpcode == 0), storing incr to stack before
-  // the loop and then loading it from stack in block loopMBB is necessary to
-  // prevent MachineLICM pass to hoist "or" instruction out of the block
-  // loopMBB.
-
-  int fi = 0;
-  if (BinOpcode == 0 && !Nand) {
-    // Get or create a temporary stack location.
-    MipsFunctionInfo *MipsFI = MF->getInfo<MipsFunctionInfo>();
-    fi = MipsFI->getAtomicFrameIndex();
-    if (fi == -1) {
-      fi = MF->getFrameInfo()->CreateStackObject(Size, Size, false);
-      MipsFI->setAtomicFrameIndex(fi);
-    }
-
-    BuildMI(BB, dl, TII->get(Mips::SW))
-        .addReg(Incr).addImm(0).addFrameIndex(fi);
-  }
   BB->addSuccessor(loopMBB);
+  loopMBB->addSuccessor(loopMBB);
+  loopMBB->addSuccessor(exitMBB);
 
   //  loopMBB:
   //    ll oldval, 0(ptr)
-  //    or dest, $0, oldval
-  //    <binop> tmp1, oldval, incr
-  //    sc tmp1, 0(ptr)
-  //    beq tmp1, $0, loopMBB
+  //    <binop> storeval, oldval, incr
+  //    sc success, storeval, 0(ptr)
+  //    beq success, $0, loopMBB
   BB = loopMBB;
-  BuildMI(BB, dl, TII->get(Mips::LL), Oldval).addImm(0).addReg(Ptr);
-  BuildMI(BB, dl, TII->get(Mips::OR), Dest).addReg(Mips::ZERO).addReg(Oldval);
+  BuildMI(BB, dl, TII->get(Mips::LL), OldVal).addReg(Ptr).addImm(0);
   if (Nand) {
-    //  and tmp2, oldval, incr
-    //  nor tmp1, $0, tmp2
-    BuildMI(BB, dl, TII->get(Mips::AND), Tmp2).addReg(Oldval).addReg(Incr);
-    BuildMI(BB, dl, TII->get(Mips::NOR), Tmp1).addReg(Mips::ZERO).addReg(Tmp2);
+    //  and andres, oldval, incr
+    //  nor storeval, $0, andres
+    BuildMI(BB, dl, TII->get(Mips::AND), AndRes).addReg(OldVal).addReg(Incr);
+    BuildMI(BB, dl, TII->get(Mips::NOR), StoreVal)
+      .addReg(Mips::ZERO).addReg(AndRes);
   } else if (BinOpcode) {
-    //  <binop> tmp1, oldval, incr
-    BuildMI(BB, dl, TII->get(BinOpcode), Tmp1).addReg(Oldval).addReg(Incr);
+    //  <binop> storeval, oldval, incr
+    BuildMI(BB, dl, TII->get(BinOpcode), StoreVal).addReg(OldVal).addReg(Incr);
   } else {
-    //  lw tmp2, fi(sp)              // load incr from stack
-    //  or tmp1, $zero, tmp2
-    BuildMI(BB, dl, TII->get(Mips::LW), Tmp2).addImm(0).addFrameIndex(fi);;
-    BuildMI(BB, dl, TII->get(Mips::OR), Tmp1).addReg(Mips::ZERO).addReg(Tmp2);
+    StoreVal = Incr;
   }
-  BuildMI(BB, dl, TII->get(Mips::SC), Tmp1).addReg(Tmp1).addImm(0).addReg(Ptr);
+  BuildMI(BB, dl, TII->get(Mips::SC), Success)
+    .addReg(StoreVal).addReg(Ptr).addImm(0);
   BuildMI(BB, dl, TII->get(Mips::BEQ))
-    .addReg(Tmp1).addReg(Mips::ZERO).addMBB(loopMBB);
-  BB->addSuccessor(loopMBB);
-  BB->addSuccessor(exitMBB);
+    .addReg(Success).addReg(Mips::ZERO).addMBB(loopMBB);
 
   MI->eraseFromParent();   // The instruction is gone now.
 
-  return BB;
+  return exitMBB;
 }
 
 MachineBasicBlock *
@@ -829,33 +812,34 @@ MipsTargetLowering::EmitAtomicBinaryPartword(MachineInstr *MI,
   unsigned Ptr = MI->getOperand(1).getReg();
   unsigned Incr = MI->getOperand(2).getReg();
 
-  unsigned Addr = RegInfo.createVirtualRegister(RC);
-  unsigned Shift = RegInfo.createVirtualRegister(RC);
+  unsigned AlignedAddr = RegInfo.createVirtualRegister(RC);
+  unsigned ShiftAmt = RegInfo.createVirtualRegister(RC);
   unsigned Mask = RegInfo.createVirtualRegister(RC);
   unsigned Mask2 = RegInfo.createVirtualRegister(RC);
-  unsigned Newval = RegInfo.createVirtualRegister(RC);
-  unsigned Oldval = RegInfo.createVirtualRegister(RC);
+  unsigned NewVal = RegInfo.createVirtualRegister(RC);
+  unsigned OldVal = RegInfo.createVirtualRegister(RC);
   unsigned Incr2 = RegInfo.createVirtualRegister(RC);
-  unsigned Tmp1 = RegInfo.createVirtualRegister(RC);
-  unsigned Tmp2 = RegInfo.createVirtualRegister(RC);
-  unsigned Tmp3 = RegInfo.createVirtualRegister(RC);
-  unsigned Tmp4 = RegInfo.createVirtualRegister(RC);
-  unsigned Tmp5 = RegInfo.createVirtualRegister(RC);
-  unsigned Tmp6 = RegInfo.createVirtualRegister(RC);
-  unsigned Tmp7 = RegInfo.createVirtualRegister(RC);
-  unsigned Tmp8 = RegInfo.createVirtualRegister(RC);
-  unsigned Tmp9 = RegInfo.createVirtualRegister(RC);
-  unsigned Tmp10 = RegInfo.createVirtualRegister(RC);
-  unsigned Tmp11 = RegInfo.createVirtualRegister(RC);
-  unsigned Tmp12 = RegInfo.createVirtualRegister(RC);
+  unsigned MaskLSB2 = RegInfo.createVirtualRegister(RC);
+  unsigned PtrLSB2 = RegInfo.createVirtualRegister(RC);
+  unsigned MaskUpper = RegInfo.createVirtualRegister(RC);
+  unsigned AndRes = RegInfo.createVirtualRegister(RC);
+  unsigned BinOpRes = RegInfo.createVirtualRegister(RC);
+  unsigned MaskedOldVal0 = RegInfo.createVirtualRegister(RC);
+  unsigned StoreVal = RegInfo.createVirtualRegister(RC);
+  unsigned MaskedOldVal1 = RegInfo.createVirtualRegister(RC);
+  unsigned SrlRes = RegInfo.createVirtualRegister(RC);
+  unsigned SllRes = RegInfo.createVirtualRegister(RC);
+  unsigned Success = RegInfo.createVirtualRegister(RC);
 
   // insert new blocks after the current block
   const BasicBlock *LLVM_BB = BB->getBasicBlock();
   MachineBasicBlock *loopMBB = MF->CreateMachineBasicBlock(LLVM_BB);
+  MachineBasicBlock *sinkMBB = MF->CreateMachineBasicBlock(LLVM_BB);
   MachineBasicBlock *exitMBB = MF->CreateMachineBasicBlock(LLVM_BB);
   MachineFunction::iterator It = BB;
   ++It;
   MF->insert(It, loopMBB);
+  MF->insert(It, sinkMBB);
   MF->insert(It, exitMBB);
 
   // Transfer the remainder of BB and its successor edges to exitMBB.
@@ -864,111 +848,104 @@ MipsTargetLowering::EmitAtomicBinaryPartword(MachineInstr *MI,
                   BB->end());
   exitMBB->transferSuccessorsAndUpdatePHIs(BB);
 
-  //  thisMBB:
-  //    addiu   tmp1,$0,-4                # 0xfffffffc
-  //    and     addr,ptr,tmp1
-  //    andi    tmp2,ptr,3
-  //    sll     shift,tmp2,3
-  //    ori     tmp3,$0,255               # 0xff
-  //    sll     mask,tmp3,shift
-  //    nor     mask2,$0,mask
-  //    andi    tmp4,incr,255
-  //    sll     incr2,tmp4,shift
-  //    sw      incr2, fi(sp)      // store incr2 to stack (when BinOpcode == 0)
+  BB->addSuccessor(loopMBB);
+  loopMBB->addSuccessor(loopMBB);
+  loopMBB->addSuccessor(sinkMBB);
+  sinkMBB->addSuccessor(exitMBB);
 
-  // Note: for atomic.swap (when BinOpcode == 0), storing incr2 to stack before
-  // the loop and then loading it from stack in block loopMBB is necessary to
-  // prevent MachineLICM pass to hoist "or" instruction out of the block
-  // loopMBB.
+  //  thisMBB:
+  //    addiu   masklsb2,$0,-4                # 0xfffffffc
+  //    and     alignedaddr,ptr,masklsb2
+  //    andi    ptrlsb2,ptr,3
+  //    sll     shiftamt,ptrlsb2,3
+  //    ori     maskupper,$0,255               # 0xff
+  //    sll     mask,maskupper,shiftamt
+  //    nor     mask2,$0,mask
+  //    sll     incr2,incr,shiftamt
 
   int64_t MaskImm = (Size == 1) ? 255 : 65535;
-  BuildMI(BB, dl, TII->get(Mips::ADDiu), Tmp1).addReg(Mips::ZERO).addImm(-4);
-  BuildMI(BB, dl, TII->get(Mips::AND), Addr).addReg(Ptr).addReg(Tmp1);
-  BuildMI(BB, dl, TII->get(Mips::ANDi), Tmp2).addReg(Ptr).addImm(3);
-  BuildMI(BB, dl, TII->get(Mips::SLL), Shift).addReg(Tmp2).addImm(3);
-  BuildMI(BB, dl, TII->get(Mips::ORi), Tmp3).addReg(Mips::ZERO).addImm(MaskImm);
-  BuildMI(BB, dl, TII->get(Mips::SLL), Mask).addReg(Tmp3).addReg(Shift);
+  BuildMI(BB, dl, TII->get(Mips::ADDiu), MaskLSB2)
+    .addReg(Mips::ZERO).addImm(-4);
+  BuildMI(BB, dl, TII->get(Mips::AND), AlignedAddr)
+    .addReg(Ptr).addReg(MaskLSB2);
+  BuildMI(BB, dl, TII->get(Mips::ANDi), PtrLSB2).addReg(Ptr).addImm(3);
+  BuildMI(BB, dl, TII->get(Mips::SLL), ShiftAmt).addReg(PtrLSB2).addImm(3);
+  BuildMI(BB, dl, TII->get(Mips::ORi), MaskUpper)
+    .addReg(Mips::ZERO).addImm(MaskImm);
+  BuildMI(BB, dl, TII->get(Mips::SLLV), Mask)
+    .addReg(ShiftAmt).addReg(MaskUpper);
   BuildMI(BB, dl, TII->get(Mips::NOR), Mask2).addReg(Mips::ZERO).addReg(Mask);
-  if (BinOpcode != Mips::SUBu) {
-    BuildMI(BB, dl, TII->get(Mips::ANDi), Tmp4).addReg(Incr).addImm(MaskImm);
-    BuildMI(BB, dl, TII->get(Mips::SLL), Incr2).addReg(Tmp4).addReg(Shift);
-  } else {
-    BuildMI(BB, dl, TII->get(Mips::SUBu), Tmp4).addReg(Mips::ZERO).addReg(Incr);
-    BuildMI(BB, dl, TII->get(Mips::ANDi), Tmp5).addReg(Tmp4).addImm(MaskImm);
-    BuildMI(BB, dl, TII->get(Mips::SLL), Incr2).addReg(Tmp5).addReg(Shift);
-  }
+  BuildMI(BB, dl, TII->get(Mips::SLLV), Incr2).addReg(ShiftAmt).addReg(Incr);
 
-  int fi = 0;
-  if (BinOpcode == 0 && !Nand) {
-    // Get or create a temporary stack location.
-    MipsFunctionInfo *MipsFI = MF->getInfo<MipsFunctionInfo>();
-    fi = MipsFI->getAtomicFrameIndex();
-    if (fi == -1) {
-      fi = MF->getFrameInfo()->CreateStackObject(Size, Size, false);
-      MipsFI->setAtomicFrameIndex(fi);
-    }
 
-    BuildMI(BB, dl, TII->get(Mips::SW))
-        .addReg(Incr2).addImm(0).addFrameIndex(fi);
-  }
-  BB->addSuccessor(loopMBB);
-
+  // atomic.load.binop
   // loopMBB:
-  //   ll      oldval,0(addr)
-  //   binop   tmp7,oldval,incr2
-  //   and     newval,tmp7,mask
-  //   and     tmp8,oldval,mask2
-  //   or      tmp9,tmp8,newval
-  //   sc      tmp9,0(addr)
-  //   beq     tmp9,$0,loopMBB
-  BB = loopMBB;
-  BuildMI(BB, dl, TII->get(Mips::LL), Oldval).addImm(0).addReg(Addr);
-  if (Nand) {
-    //  and tmp6, oldval, incr2
-    //  nor tmp7, $0, tmp6
-    BuildMI(BB, dl, TII->get(Mips::AND), Tmp6).addReg(Oldval).addReg(Incr2);
-    BuildMI(BB, dl, TII->get(Mips::NOR), Tmp7).addReg(Mips::ZERO).addReg(Tmp6);
-  } else if (BinOpcode == Mips::SUBu) {
-    //  addu tmp7, oldval, incr2
-    BuildMI(BB, dl, TII->get(Mips::ADDu), Tmp7).addReg(Oldval).addReg(Incr2);
-  } else if (BinOpcode) {
-    //  <binop> tmp7, oldval, incr2
-    BuildMI(BB, dl, TII->get(BinOpcode), Tmp7).addReg(Oldval).addReg(Incr2);
-  } else {
-    //  lw tmp6, fi(sp)              // load incr2 from stack
-    //  or tmp7, $zero, tmp6
-    BuildMI(BB, dl, TII->get(Mips::LW), Tmp6).addImm(0).addFrameIndex(fi);;
-    BuildMI(BB, dl, TII->get(Mips::OR), Tmp7).addReg(Mips::ZERO).addReg(Tmp6);
-  }
-  BuildMI(BB, dl, TII->get(Mips::AND), Newval).addReg(Tmp7).addReg(Mask);
-  BuildMI(BB, dl, TII->get(Mips::AND), Tmp8).addReg(Oldval).addReg(Mask2);
-  BuildMI(BB, dl, TII->get(Mips::OR), Tmp9).addReg(Tmp8).addReg(Newval);
-  BuildMI(BB, dl, TII->get(Mips::SC), Tmp9).addReg(Tmp9).addImm(0).addReg(Addr);
-  BuildMI(BB, dl, TII->get(Mips::BEQ))
-      .addReg(Tmp9).addReg(Mips::ZERO).addMBB(loopMBB);
-  BB->addSuccessor(loopMBB);
-  BB->addSuccessor(exitMBB);
+  //   ll      oldval,0(alignedaddr)
+  //   binop   binopres,oldval,incr2
+  //   and     newval,binopres,mask
+  //   and     maskedoldval0,oldval,mask2
+  //   or      storeval,maskedoldval0,newval
+  //   sc      success,storeval,0(alignedaddr)
+  //   beq     success,$0,loopMBB
 
-  //  exitMBB:
-  //    and     tmp10,oldval,mask
-  //    srl     tmp11,tmp10,shift
-  //    sll     tmp12,tmp11,24
-  //    sra     dest,tmp12,24
-  BB = exitMBB;
+  // atomic.swap
+  // loopMBB:
+  //   ll      oldval,0(alignedaddr)
+  //   and     newval,incr2,mask
+  //   and     maskedoldval0,oldval,mask2
+  //   or      storeval,maskedoldval0,newval
+  //   sc      success,storeval,0(alignedaddr)
+  //   beq     success,$0,loopMBB
+
+  BB = loopMBB;
+  BuildMI(BB, dl, TII->get(Mips::LL), OldVal).addReg(AlignedAddr).addImm(0);
+  if (Nand) {
+    //  and andres, oldval, incr2
+    //  nor binopres, $0, andres
+    //  and newval, binopres, mask
+    BuildMI(BB, dl, TII->get(Mips::AND), AndRes).addReg(OldVal).addReg(Incr2);
+    BuildMI(BB, dl, TII->get(Mips::NOR), BinOpRes)
+      .addReg(Mips::ZERO).addReg(AndRes);
+    BuildMI(BB, dl, TII->get(Mips::AND), NewVal).addReg(BinOpRes).addReg(Mask);
+  } else if (BinOpcode) {
+    //  <binop> binopres, oldval, incr2
+    //  and newval, binopres, mask
+    BuildMI(BB, dl, TII->get(BinOpcode), BinOpRes).addReg(OldVal).addReg(Incr2);
+    BuildMI(BB, dl, TII->get(Mips::AND), NewVal).addReg(BinOpRes).addReg(Mask);
+  } else {// atomic.swap
+    //  and newval, incr2, mask
+    BuildMI(BB, dl, TII->get(Mips::AND), NewVal).addReg(Incr2).addReg(Mask);
+  }
+    
+  BuildMI(BB, dl, TII->get(Mips::AND), MaskedOldVal0)
+    .addReg(OldVal).addReg(Mask2);
+  BuildMI(BB, dl, TII->get(Mips::OR), StoreVal)
+    .addReg(MaskedOldVal0).addReg(NewVal);
+  BuildMI(BB, dl, TII->get(Mips::SC), Success)
+    .addReg(StoreVal).addReg(AlignedAddr).addImm(0);
+  BuildMI(BB, dl, TII->get(Mips::BEQ))
+    .addReg(Success).addReg(Mips::ZERO).addMBB(loopMBB);
+
+  //  sinkMBB:
+  //    and     maskedoldval1,oldval,mask
+  //    srl     srlres,maskedoldval1,shiftamt
+  //    sll     sllres,srlres,24
+  //    sra     dest,sllres,24
+  BB = sinkMBB;
   int64_t ShiftImm = (Size == 1) ? 24 : 16;
-  // reverse order
-  BuildMI(*BB, BB->begin(), dl, TII->get(Mips::SRA), Dest)
-      .addReg(Tmp12).addImm(ShiftImm);
-  BuildMI(*BB, BB->begin(), dl, TII->get(Mips::SLL), Tmp12)
-      .addReg(Tmp11).addImm(ShiftImm);
-  BuildMI(*BB, BB->begin(), dl, TII->get(Mips::SRL), Tmp11)
-      .addReg(Tmp10).addReg(Shift);
-  BuildMI(*BB, BB->begin(), dl, TII->get(Mips::AND), Tmp10)
-    .addReg(Oldval).addReg(Mask);
+
+  BuildMI(BB, dl, TII->get(Mips::AND), MaskedOldVal1)
+    .addReg(OldVal).addReg(Mask);
+  BuildMI(BB, dl, TII->get(Mips::SRLV), SrlRes)
+      .addReg(ShiftAmt).addReg(MaskedOldVal1);
+  BuildMI(BB, dl, TII->get(Mips::SLL), SllRes)
+      .addReg(SrlRes).addImm(ShiftImm);
+  BuildMI(BB, dl, TII->get(Mips::SRA), Dest)
+      .addReg(SllRes).addImm(ShiftImm);
 
   MI->eraseFromParent();   // The instruction is gone now.
 
-  return BB;
+  return exitMBB;
 }
 
 MachineBasicBlock *
@@ -985,11 +962,10 @@ MipsTargetLowering::EmitAtomicCmpSwap(MachineInstr *MI,
 
   unsigned Dest    = MI->getOperand(0).getReg();
   unsigned Ptr     = MI->getOperand(1).getReg();
-  unsigned Oldval  = MI->getOperand(2).getReg();
-  unsigned Newval  = MI->getOperand(3).getReg();
+  unsigned OldVal  = MI->getOperand(2).getReg();
+  unsigned NewVal  = MI->getOperand(3).getReg();
 
-  unsigned Tmp1 = RegInfo.createVirtualRegister(RC);
-  unsigned Tmp2 = RegInfo.createVirtualRegister(RC);
+  unsigned Success = RegInfo.createVirtualRegister(RC);
 
   // insert new blocks after the current block
   const BasicBlock *LLVM_BB = BB->getBasicBlock();
@@ -1008,54 +984,35 @@ MipsTargetLowering::EmitAtomicCmpSwap(MachineInstr *MI,
                   BB->end());
   exitMBB->transferSuccessorsAndUpdatePHIs(BB);
 
-  // Get or create a temporary stack location.
-  MipsFunctionInfo *MipsFI = MF->getInfo<MipsFunctionInfo>();
-  int fi = MipsFI->getAtomicFrameIndex();
-  if (fi == -1) {
-    fi = MF->getFrameInfo()->CreateStackObject(Size, Size, false);
-    MipsFI->setAtomicFrameIndex(fi);
-  }
-
   //  thisMBB:
   //    ...
-  //    sw newval, fi(sp)           // store newval to stack
   //    fallthrough --> loop1MBB
-
-  // Note: storing newval to stack before the loop and then loading it from
-  // stack in block loop2MBB is necessary to prevent MachineLICM pass to
-  // hoist "or" instruction out of the block loop2MBB.
-
-  BuildMI(BB, dl, TII->get(Mips::SW))
-      .addReg(Newval).addImm(0).addFrameIndex(fi);
   BB->addSuccessor(loop1MBB);
+  loop1MBB->addSuccessor(exitMBB);
+  loop1MBB->addSuccessor(loop2MBB);
+  loop2MBB->addSuccessor(loop1MBB);
+  loop2MBB->addSuccessor(exitMBB);
 
   // loop1MBB:
   //   ll dest, 0(ptr)
   //   bne dest, oldval, exitMBB
   BB = loop1MBB;
-  BuildMI(BB, dl, TII->get(Mips::LL), Dest).addImm(0).addReg(Ptr);
+  BuildMI(BB, dl, TII->get(Mips::LL), Dest).addReg(Ptr).addImm(0);
   BuildMI(BB, dl, TII->get(Mips::BNE))
-    .addReg(Dest).addReg(Oldval).addMBB(exitMBB);
-  BB->addSuccessor(exitMBB);
-  BB->addSuccessor(loop2MBB);
+    .addReg(Dest).addReg(OldVal).addMBB(exitMBB);
 
   // loop2MBB:
-  //   lw tmp2, fi(sp)              // load newval from stack
-  //   or tmp1, $0, tmp2
-  //   sc tmp1, 0(ptr)
-  //   beq tmp1, $0, loop1MBB
+  //   sc success, newval, 0(ptr)
+  //   beq success, $0, loop1MBB
   BB = loop2MBB;
-  BuildMI(BB, dl, TII->get(Mips::LW), Tmp2).addImm(0).addFrameIndex(fi);;
-  BuildMI(BB, dl, TII->get(Mips::OR), Tmp1).addReg(Mips::ZERO).addReg(Tmp2);
-  BuildMI(BB, dl, TII->get(Mips::SC), Tmp1).addReg(Tmp1).addImm(0).addReg(Ptr);
+  BuildMI(BB, dl, TII->get(Mips::SC), Success)
+    .addReg(NewVal).addReg(Ptr).addImm(0);
   BuildMI(BB, dl, TII->get(Mips::BEQ))
-    .addReg(Tmp1).addReg(Mips::ZERO).addMBB(loop1MBB);
-  BB->addSuccessor(loop1MBB);
-  BB->addSuccessor(exitMBB);
+    .addReg(Success).addReg(Mips::ZERO).addMBB(loop1MBB);
 
   MI->eraseFromParent();   // The instruction is gone now.
 
-  return BB;
+  return exitMBB;
 }
 
 MachineBasicBlock *
@@ -1073,36 +1030,39 @@ MipsTargetLowering::EmitAtomicCmpSwapPartword(MachineInstr *MI,
 
   unsigned Dest    = MI->getOperand(0).getReg();
   unsigned Ptr     = MI->getOperand(1).getReg();
-  unsigned Oldval  = MI->getOperand(2).getReg();
-  unsigned Newval  = MI->getOperand(3).getReg();
+  unsigned CmpVal  = MI->getOperand(2).getReg();
+  unsigned NewVal  = MI->getOperand(3).getReg();
 
-  unsigned Addr = RegInfo.createVirtualRegister(RC);
-  unsigned Shift = RegInfo.createVirtualRegister(RC);
+  unsigned AlignedAddr = RegInfo.createVirtualRegister(RC);
+  unsigned ShiftAmt = RegInfo.createVirtualRegister(RC);
   unsigned Mask = RegInfo.createVirtualRegister(RC);
   unsigned Mask2 = RegInfo.createVirtualRegister(RC);
-  unsigned Oldval2 = RegInfo.createVirtualRegister(RC);
-  unsigned Oldval3 = RegInfo.createVirtualRegister(RC);
-  unsigned Oldval4 = RegInfo.createVirtualRegister(RC);
-  unsigned Newval2 = RegInfo.createVirtualRegister(RC);
-  unsigned Tmp1 = RegInfo.createVirtualRegister(RC);
-  unsigned Tmp2 = RegInfo.createVirtualRegister(RC);
-  unsigned Tmp3 = RegInfo.createVirtualRegister(RC);
-  unsigned Tmp4 = RegInfo.createVirtualRegister(RC);
-  unsigned Tmp5 = RegInfo.createVirtualRegister(RC);
-  unsigned Tmp6 = RegInfo.createVirtualRegister(RC);
-  unsigned Tmp7 = RegInfo.createVirtualRegister(RC);
-  unsigned Tmp8 = RegInfo.createVirtualRegister(RC);
-  unsigned Tmp9 = RegInfo.createVirtualRegister(RC);
+  unsigned ShiftedCmpVal = RegInfo.createVirtualRegister(RC);
+  unsigned OldVal = RegInfo.createVirtualRegister(RC);
+  unsigned MaskedOldVal0 = RegInfo.createVirtualRegister(RC);
+  unsigned ShiftedNewVal = RegInfo.createVirtualRegister(RC);
+  unsigned MaskLSB2 = RegInfo.createVirtualRegister(RC);
+  unsigned PtrLSB2 = RegInfo.createVirtualRegister(RC);
+  unsigned MaskUpper = RegInfo.createVirtualRegister(RC);
+  unsigned MaskedCmpVal = RegInfo.createVirtualRegister(RC);
+  unsigned MaskedNewVal = RegInfo.createVirtualRegister(RC);
+  unsigned MaskedOldVal1 = RegInfo.createVirtualRegister(RC);
+  unsigned StoreVal = RegInfo.createVirtualRegister(RC);
+  unsigned SrlRes = RegInfo.createVirtualRegister(RC);
+  unsigned SllRes = RegInfo.createVirtualRegister(RC);
+  unsigned Success = RegInfo.createVirtualRegister(RC);
 
   // insert new blocks after the current block
   const BasicBlock *LLVM_BB = BB->getBasicBlock();
   MachineBasicBlock *loop1MBB = MF->CreateMachineBasicBlock(LLVM_BB);
   MachineBasicBlock *loop2MBB = MF->CreateMachineBasicBlock(LLVM_BB);
+  MachineBasicBlock *sinkMBB = MF->CreateMachineBasicBlock(LLVM_BB);
   MachineBasicBlock *exitMBB = MF->CreateMachineBasicBlock(LLVM_BB);
   MachineFunction::iterator It = BB;
   ++It;
   MF->insert(It, loop1MBB);
   MF->insert(It, loop2MBB);
+  MF->insert(It, sinkMBB);
   MF->insert(It, exitMBB);
 
   // Transfer the remainder of BB and its successor edges to exitMBB.
@@ -1111,76 +1071,90 @@ MipsTargetLowering::EmitAtomicCmpSwapPartword(MachineInstr *MI,
                   BB->end());
   exitMBB->transferSuccessorsAndUpdatePHIs(BB);
 
-  //  thisMBB:
-  //    addiu   tmp1,$0,-4                # 0xfffffffc
-  //    and     addr,ptr,tmp1
-  //    andi    tmp2,ptr,3
-  //    sll     shift,tmp2,3
-  //    ori     tmp3,$0,255               # 0xff
-  //    sll     mask,tmp3,shift
-  //    nor     mask2,$0,mask
-  //    andi    tmp4,oldval,255
-  //    sll     oldval2,tmp4,shift
-  //    andi    tmp5,newval,255
-  //    sll     newval2,tmp5,shift
-  int64_t MaskImm = (Size == 1) ? 255 : 65535;
-  BuildMI(BB, dl, TII->get(Mips::ADDiu), Tmp1).addReg(Mips::ZERO).addImm(-4);
-  BuildMI(BB, dl, TII->get(Mips::AND), Addr).addReg(Ptr).addReg(Tmp1);
-  BuildMI(BB, dl, TII->get(Mips::ANDi), Tmp2).addReg(Ptr).addImm(3);
-  BuildMI(BB, dl, TII->get(Mips::SLL), Shift).addReg(Tmp2).addImm(3);
-  BuildMI(BB, dl, TII->get(Mips::ORi), Tmp3).addReg(Mips::ZERO).addImm(MaskImm);
-  BuildMI(BB, dl, TII->get(Mips::SLL), Mask).addReg(Tmp3).addReg(Shift);
-  BuildMI(BB, dl, TII->get(Mips::NOR), Mask2).addReg(Mips::ZERO).addReg(Mask);
-  BuildMI(BB, dl, TII->get(Mips::ANDi), Tmp4).addReg(Oldval).addImm(MaskImm);
-  BuildMI(BB, dl, TII->get(Mips::SLL), Oldval2).addReg(Tmp4).addReg(Shift);
-  BuildMI(BB, dl, TII->get(Mips::ANDi), Tmp5).addReg(Newval).addImm(MaskImm);
-  BuildMI(BB, dl, TII->get(Mips::SLL), Newval2).addReg(Tmp5).addReg(Shift);
   BB->addSuccessor(loop1MBB);
+  loop1MBB->addSuccessor(sinkMBB);
+  loop1MBB->addSuccessor(loop2MBB);
+  loop2MBB->addSuccessor(loop1MBB);
+  loop2MBB->addSuccessor(sinkMBB);
+  sinkMBB->addSuccessor(exitMBB);
+
+  // FIXME: computation of newval2 can be moved to loop2MBB.
+  //  thisMBB:
+  //    addiu   masklsb2,$0,-4                # 0xfffffffc
+  //    and     alignedaddr,ptr,masklsb2
+  //    andi    ptrlsb2,ptr,3
+  //    sll     shiftamt,ptrlsb2,3
+  //    ori     maskupper,$0,255               # 0xff
+  //    sll     mask,maskupper,shiftamt
+  //    nor     mask2,$0,mask
+  //    andi    maskedcmpval,cmpval,255
+  //    sll     shiftedcmpval,maskedcmpval,shiftamt
+  //    andi    maskednewval,newval,255
+  //    sll     shiftednewval,maskednewval,shiftamt
+  int64_t MaskImm = (Size == 1) ? 255 : 65535;
+  BuildMI(BB, dl, TII->get(Mips::ADDiu), MaskLSB2)
+    .addReg(Mips::ZERO).addImm(-4);
+  BuildMI(BB, dl, TII->get(Mips::AND), AlignedAddr)
+    .addReg(Ptr).addReg(MaskLSB2);
+  BuildMI(BB, dl, TII->get(Mips::ANDi), PtrLSB2).addReg(Ptr).addImm(3);
+  BuildMI(BB, dl, TII->get(Mips::SLL), ShiftAmt).addReg(PtrLSB2).addImm(3);
+  BuildMI(BB, dl, TII->get(Mips::ORi), MaskUpper)
+    .addReg(Mips::ZERO).addImm(MaskImm);
+  BuildMI(BB, dl, TII->get(Mips::SLLV), Mask)
+    .addReg(ShiftAmt).addReg(MaskUpper);
+  BuildMI(BB, dl, TII->get(Mips::NOR), Mask2).addReg(Mips::ZERO).addReg(Mask);
+  BuildMI(BB, dl, TII->get(Mips::ANDi), MaskedCmpVal)
+    .addReg(CmpVal).addImm(MaskImm);
+  BuildMI(BB, dl, TII->get(Mips::SLLV), ShiftedCmpVal)
+    .addReg(ShiftAmt).addReg(MaskedCmpVal);
+  BuildMI(BB, dl, TII->get(Mips::ANDi), MaskedNewVal)
+    .addReg(NewVal).addImm(MaskImm);
+  BuildMI(BB, dl, TII->get(Mips::SLLV), ShiftedNewVal)
+    .addReg(ShiftAmt).addReg(MaskedNewVal);
 
   //  loop1MBB:
-  //    ll      oldval3,0(addr)
-  //    and     oldval4,oldval3,mask
-  //    bne     oldval4,oldval2,exitMBB
+  //    ll      oldval,0(alginedaddr)
+  //    and     maskedoldval0,oldval,mask
+  //    bne     maskedoldval0,shiftedcmpval,sinkMBB
   BB = loop1MBB;
-  BuildMI(BB, dl, TII->get(Mips::LL), Oldval3).addImm(0).addReg(Addr);
-  BuildMI(BB, dl, TII->get(Mips::AND), Oldval4).addReg(Oldval3).addReg(Mask);
+  BuildMI(BB, dl, TII->get(Mips::LL), OldVal).addReg(AlignedAddr).addImm(0);
+  BuildMI(BB, dl, TII->get(Mips::AND), MaskedOldVal0)
+    .addReg(OldVal).addReg(Mask);
   BuildMI(BB, dl, TII->get(Mips::BNE))
-      .addReg(Oldval4).addReg(Oldval2).addMBB(exitMBB);
-  BB->addSuccessor(exitMBB);
-  BB->addSuccessor(loop2MBB);
+    .addReg(MaskedOldVal0).addReg(ShiftedCmpVal).addMBB(sinkMBB);
 
   //  loop2MBB:
-  //    and     tmp6,oldval3,mask2
-  //    or      tmp7,tmp6,newval2
-  //    sc      tmp7,0(addr)
-  //    beq     tmp7,$0,loop1MBB
+  //    and     maskedoldval1,oldval,mask2
+  //    or      storeval,maskedoldval1,shiftednewval
+  //    sc      success,storeval,0(alignedaddr)
+  //    beq     success,$0,loop1MBB
   BB = loop2MBB;
-  BuildMI(BB, dl, TII->get(Mips::AND), Tmp6).addReg(Oldval3).addReg(Mask2);
-  BuildMI(BB, dl, TII->get(Mips::OR), Tmp7).addReg(Tmp6).addReg(Newval2);
-  BuildMI(BB, dl, TII->get(Mips::SC), Tmp7)
-      .addReg(Tmp7).addImm(0).addReg(Addr);
+  BuildMI(BB, dl, TII->get(Mips::AND), MaskedOldVal1)
+    .addReg(OldVal).addReg(Mask2);
+  BuildMI(BB, dl, TII->get(Mips::OR), StoreVal)
+    .addReg(MaskedOldVal1).addReg(ShiftedNewVal);
+  BuildMI(BB, dl, TII->get(Mips::SC), Success)
+      .addReg(StoreVal).addReg(AlignedAddr).addImm(0);
   BuildMI(BB, dl, TII->get(Mips::BEQ))
-      .addReg(Tmp7).addReg(Mips::ZERO).addMBB(loop1MBB);
-  BB->addSuccessor(loop1MBB);
-  BB->addSuccessor(exitMBB);
+      .addReg(Success).addReg(Mips::ZERO).addMBB(loop1MBB);
 
-  //  exitMBB:
-  //    srl     tmp8,oldval4,shift
-  //    sll     tmp9,tmp8,24
-  //    sra     dest,tmp9,24
-  BB = exitMBB;
+  //  sinkMBB:
+  //    srl     srlres,maskedoldval0,shiftamt
+  //    sll     sllres,srlres,24
+  //    sra     dest,sllres,24
+  BB = sinkMBB;
   int64_t ShiftImm = (Size == 1) ? 24 : 16;
-  // reverse order
-  BuildMI(*BB, BB->begin(), dl, TII->get(Mips::SRA), Dest)
-      .addReg(Tmp9).addImm(ShiftImm);
-  BuildMI(*BB, BB->begin(), dl, TII->get(Mips::SLL), Tmp9)
-      .addReg(Tmp8).addImm(ShiftImm);
-  BuildMI(*BB, BB->begin(), dl, TII->get(Mips::SRL), Tmp8)
-      .addReg(Oldval4).addReg(Shift);
+
+  BuildMI(BB, dl, TII->get(Mips::SRLV), SrlRes)
+      .addReg(ShiftAmt).addReg(MaskedOldVal0);
+  BuildMI(BB, dl, TII->get(Mips::SLL), SllRes)
+      .addReg(SrlRes).addImm(ShiftImm);
+  BuildMI(BB, dl, TII->get(Mips::SRA), Dest)
+      .addReg(SllRes).addImm(ShiftImm);
 
   MI->eraseFromParent();   // The instruction is gone now.
 
-  return BB;
+  return exitMBB;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1189,9 +1163,10 @@ MipsTargetLowering::EmitAtomicCmpSwapPartword(MachineInstr *MI,
 SDValue MipsTargetLowering::
 LowerDYNAMIC_STACKALLOC(SDValue Op, SelectionDAG &DAG) const
 {
-  unsigned StackAlignment =
-    getTargetMachine().getFrameLowering()->getStackAlignment();
-  assert(StackAlignment >=
+  MachineFunction &MF = DAG.getMachineFunction();
+  MipsFunctionInfo *MipsFI = MF.getInfo<MipsFunctionInfo>();
+
+  assert(getTargetMachine().getFrameLowering()->getStackAlignment() >=
          cast<ConstantSDNode>(Op.getOperand(2).getNode())->getZExtValue() &&
          "Cannot lower if the alignment of the allocated space is larger than \
           that of the stack.");
@@ -1211,24 +1186,14 @@ LowerDYNAMIC_STACKALLOC(SDValue Op, SelectionDAG &DAG) const
   // must be placed in the stack pointer register.
   Chain = DAG.getCopyToReg(StackPointer.getValue(1), dl, Mips::SP, Sub,
                            SDValue());
-  // Retrieve updated $sp. There is a glue input to prevent instructions that
-  // clobber $sp from being inserted between copytoreg and copyfromreg.
-  SDValue NewSP = DAG.getCopyFromReg(Chain, dl, Mips::SP, MVT::i32,
-                                     Chain.getValue(1));
-
-  // The stack space reserved by alloca is located right above the argument
-  // area. It is aligned on a boundary that is a multiple of StackAlignment.
-  MachineFunction &MF = DAG.getMachineFunction();
-  MipsFunctionInfo *MipsFI = MF.getInfo<MipsFunctionInfo>();
-  unsigned SPOffset = (MipsFI->getMaxCallFrameSize() + StackAlignment - 1) /
-                      StackAlignment * StackAlignment;
-  SDValue AllocPtr = DAG.getNode(ISD::ADD, dl, MVT::i32, NewSP,
-                                 DAG.getConstant(SPOffset, MVT::i32));
 
   // This node always has two return values: a new stack pointer
   // value and a chain
-  SDValue Ops[2] = { AllocPtr, NewSP.getValue(1) };
-  return DAG.getMergeValues(Ops, 2, dl);
+  SDVTList VTLs = DAG.getVTList(MVT::i32, MVT::Other);
+  SDValue Ptr = DAG.getFrameIndex(MipsFI->getDynAllocFI(), getPointerTy());
+  SDValue Ops[] = { Chain, Ptr, Chain.getValue(1) };
+
+  return DAG.getNode(MipsISD::DynAlloc, dl, VTLs, Ops, 3);
 }
 
 SDValue MipsTargetLowering::
@@ -1358,7 +1323,7 @@ LowerGlobalTLSAddress(SDValue Op, SelectionDAG &DAG) const
   if (getTargetMachine().getRelocationModel() == Reloc::PIC_) {
     // General Dynamic TLS Model
     SDValue TGA = DAG.getTargetGlobalAddress(GV, dl, MVT::i32,
-                                                 0, MipsII::MO_TLSGD);
+                                             0, MipsII::MO_TLSGD);
     SDValue Tlsgd = DAG.getNode(MipsISD::TlsGd, dl, MVT::i32, TGA);
     SDValue GP = DAG.getRegister(Mips::GP, MVT::i32);
     SDValue Argument = DAG.getNode(ISD::ADD, dl, MVT::i32, GP, Tlsgd);
@@ -1366,40 +1331,40 @@ LowerGlobalTLSAddress(SDValue Op, SelectionDAG &DAG) const
     ArgListTy Args;
     ArgListEntry Entry;
     Entry.Node = Argument;
-    Entry.Ty = (const Type *) Type::getInt32Ty(*DAG.getContext());
+    Entry.Ty = (Type *) Type::getInt32Ty(*DAG.getContext());
     Args.push_back(Entry);
     std::pair<SDValue, SDValue> CallResult =
         LowerCallTo(DAG.getEntryNode(),
-                 (const Type *) Type::getInt32Ty(*DAG.getContext()),
-                 false, false, false, false,
-                 0, CallingConv::C, false, true,
-                 DAG.getExternalSymbol("__tls_get_addr", PtrVT), Args, DAG, dl);
+                    (Type *) Type::getInt32Ty(*DAG.getContext()),
+                    false, false, false, false, 0, CallingConv::C, false, true,
+                    DAG.getExternalSymbol("__tls_get_addr", PtrVT), Args, DAG,
+                    dl);
 
     return CallResult.first;
-  } else {
-    SDValue Offset;
-    if (GV->isDeclaration()) {
-      // Initial Exec TLS Model
-      SDValue TGA = DAG.getTargetGlobalAddress(GV, dl, MVT::i32, 0,
-                                              MipsII::MO_GOTTPREL);
-      Offset = DAG.getLoad(MVT::i32, dl,
-                                  DAG.getEntryNode(), TGA, MachinePointerInfo(),
-                                  false, false, 0);
-    } else {
-      // Local Exec TLS Model
-      SDVTList VTs = DAG.getVTList(MVT::i32);
-      SDValue TGAHi = DAG.getTargetGlobalAddress(GV, dl, MVT::i32, 0,
-                                              MipsII::MO_TPREL_HI);
-      SDValue TGALo = DAG.getTargetGlobalAddress(GV, dl, MVT::i32, 0,
-                                              MipsII::MO_TPREL_LO);
-      SDValue Hi = DAG.getNode(MipsISD::TprelHi, dl, VTs, &TGAHi, 1);
-      SDValue Lo = DAG.getNode(MipsISD::TprelLo, dl, MVT::i32, TGALo);
-      Offset = DAG.getNode(ISD::ADD, dl, MVT::i32, Hi, Lo);
-    }
-
-    SDValue ThreadPointer = DAG.getNode(MipsISD::ThreadPointer, dl, PtrVT);
-    return DAG.getNode(ISD::ADD, dl, PtrVT, ThreadPointer, Offset);
   }
+
+  SDValue Offset;
+  if (GV->isDeclaration()) {
+    // Initial Exec TLS Model
+    SDValue TGA = DAG.getTargetGlobalAddress(GV, dl, MVT::i32, 0,
+                                             MipsII::MO_GOTTPREL);
+    Offset = DAG.getLoad(MVT::i32, dl,
+                         DAG.getEntryNode(), TGA, MachinePointerInfo(),
+                         false, false, 0);
+  } else {
+    // Local Exec TLS Model
+    SDVTList VTs = DAG.getVTList(MVT::i32);
+    SDValue TGAHi = DAG.getTargetGlobalAddress(GV, dl, MVT::i32, 0,
+                                               MipsII::MO_TPREL_HI);
+    SDValue TGALo = DAG.getTargetGlobalAddress(GV, dl, MVT::i32, 0,
+                                               MipsII::MO_TPREL_LO);
+    SDValue Hi = DAG.getNode(MipsISD::TprelHi, dl, VTs, &TGAHi, 1);
+    SDValue Lo = DAG.getNode(MipsISD::TprelLo, dl, MVT::i32, TGALo);
+    Offset = DAG.getNode(ISD::ADD, dl, MVT::i32, Hi, Lo);
+  }
+
+  SDValue ThreadPointer = DAG.getNode(MipsISD::ThreadPointer, dl, PtrVT);
+  return DAG.getNode(ISD::ADD, dl, PtrVT, ThreadPointer, Offset);
 }
 
 SDValue MipsTargetLowering::
@@ -1550,8 +1515,8 @@ SDValue MipsTargetLowering::LowerFCOPYSIGN(SDValue Op, SelectionDAG &DAG)
 
 SDValue MipsTargetLowering::
 LowerFRAMEADDR(SDValue Op, SelectionDAG &DAG) const {
-  unsigned Depth = cast<ConstantSDNode>(Op.getOperand(0))->getZExtValue();
-  assert((Depth == 0) &&
+  // check the depth
+  assert((cast<ConstantSDNode>(Op.getOperand(0))->getZExtValue() == 0) &&
          "Frame address can only be determined for current frame.");
 
   MachineFrameInfo *MFI = DAG.getMachineFunction().getFrameInfo();
@@ -1560,6 +1525,15 @@ LowerFRAMEADDR(SDValue Op, SelectionDAG &DAG) const {
   DebugLoc dl = Op.getDebugLoc();
   SDValue FrameAddr = DAG.getCopyFromReg(DAG.getEntryNode(), dl, Mips::FP, VT);
   return FrameAddr;
+}
+
+// TODO: set SType according to the desired memory barrier behavior.
+SDValue MipsTargetLowering::LowerMEMBARRIER(SDValue Op,
+                                            SelectionDAG& DAG) const {
+  unsigned SType = 0;
+  DebugLoc dl = Op.getDebugLoc();
+  return DAG.getNode(MipsISD::Sync, dl, MVT::Other, Op.getOperand(0),
+                     DAG.getConstant(SType, MVT::i32));
 }
 
 //===----------------------------------------------------------------------===//
@@ -1770,6 +1744,10 @@ MipsTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
   if (IsPIC && !MipsFI->getGPFI())
     MipsFI->setGPFI(MFI->CreateFixedObject(4, 0, true));
 
+  // Get the frame index of the stack frame object that points to the location
+  // of dynamically allocated area on the stack.
+  int DynAllocFI = MipsFI->getDynAllocFI();
+
   // Update size of the maximum argument space.
   // For O32, a minimum of four words (16 bytes) of argument space is
   // allocated.
@@ -1781,14 +1759,17 @@ MipsTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
   if (MaxCallFrameSize < NextStackOffset) {
     MipsFI->setMaxCallFrameSize(NextStackOffset);
 
-    if (IsPIC) {
-      // $gp restore slot must be aligned.
-      unsigned StackAlignment = TFL->getStackAlignment();
-      NextStackOffset = (NextStackOffset + StackAlignment - 1) /
-                        StackAlignment * StackAlignment;
-      int GPFI = MipsFI->getGPFI();
-      MFI->setObjectOffset(GPFI, NextStackOffset);
-    }
+    // Set the offsets relative to $sp of the $gp restore slot and dynamically
+    // allocated stack space. These offsets must be aligned to a boundary
+    // determined by the stack alignment of the ABI.
+    unsigned StackAlignment = TFL->getStackAlignment();
+    NextStackOffset = (NextStackOffset + StackAlignment - 1) /
+                      StackAlignment * StackAlignment;
+
+    if (IsPIC)
+      MFI->setObjectOffset(MipsFI->getGPFI(), NextStackOffset);
+
+    MFI->setObjectOffset(DynAllocFI, NextStackOffset);
   }
 
   // With EABI is it possible to have 16 args on registers.
@@ -1912,7 +1893,7 @@ MipsTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
     if (LoadSymAddr) {
       // Load callee address
       Callee = DAG.getNode(MipsISD::WrapperPIC, dl, MVT::i32, Callee);
-      SDValue LoadValue = DAG.getLoad(MVT::i32, dl, Chain, Callee,
+      SDValue LoadValue = DAG.getLoad(MVT::i32, dl, DAG.getEntryNode(), Callee,
                                       MachinePointerInfo::getGOT(),
                                       false, false, 0);
 
@@ -1922,9 +1903,6 @@ MipsTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
         Callee = DAG.getNode(ISD::ADD, dl, MVT::i32, LoadValue, Lo);
       } else
         Callee = LoadValue;
-
-      // Use chain output from LoadValue
-      Chain = LoadValue.getValue(1);
     }
 
     // copy to T9
@@ -1965,7 +1943,8 @@ MipsTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
   InFlag = Chain.getValue(1);
 
   // Create the CALLSEQ_END node.
-  Chain = DAG.getCALLSEQ_END(Chain, DAG.getIntPtrConstant(NextStackOffset, true),
+  Chain = DAG.getCALLSEQ_END(Chain,
+                             DAG.getIntPtrConstant(NextStackOffset, true),
                              DAG.getIntPtrConstant(0, true), InFlag);
   InFlag = Chain.getValue(1);
 
@@ -2313,7 +2292,7 @@ MipsTargetLowering::getSingleConstraintMatchWeight(
     // but allow it at the lowest weight.
   if (CallOperandVal == NULL)
     return CW_Default;
-  const Type *type = CallOperandVal->getType();
+  Type *type = CallOperandVal->getType();
   // Look at the constraint type.
   switch (*constraint) {
   default:
@@ -2332,14 +2311,16 @@ MipsTargetLowering::getSingleConstraintMatchWeight(
   return weight;
 }
 
-/// getRegClassForInlineAsmConstraint - Given a constraint letter (e.g. "r"),
-/// return a list of registers that can be used to satisfy the constraint.
-/// This should only be used for C_RegisterClass constraints.
+/// Given a register class constraint, like 'r', if this corresponds directly
+/// to an LLVM register class, return a register of 0 and the register class
+/// pointer.
 std::pair<unsigned, const TargetRegisterClass*> MipsTargetLowering::
 getRegForInlineAsmConstraint(const std::string &Constraint, EVT VT) const
 {
   if (Constraint.size() == 1) {
     switch (Constraint[0]) {
+    case 'd': // Address register. Same as 'r' unless generating MIPS16 code.
+    case 'y': // Same as 'r'. Exists for compatibility.
     case 'r':
       return std::make_pair(0U, Mips::CPURegsRegisterClass);
     case 'f':
@@ -2348,53 +2329,10 @@ getRegForInlineAsmConstraint(const std::string &Constraint, EVT VT) const
       if (VT == MVT::f64)
         if ((!Subtarget->isSingleFloat()) && (!Subtarget->isFP64bit()))
           return std::make_pair(0U, Mips::AFGR64RegisterClass);
+      break;
     }
   }
   return TargetLowering::getRegForInlineAsmConstraint(Constraint, VT);
-}
-
-/// Given a register class constraint, like 'r', if this corresponds directly
-/// to an LLVM register class, return a register of 0 and the register class
-/// pointer.
-std::vector<unsigned> MipsTargetLowering::
-getRegClassForInlineAsmConstraint(const std::string &Constraint,
-                                  EVT VT) const
-{
-  if (Constraint.size() != 1)
-    return std::vector<unsigned>();
-
-  switch (Constraint[0]) {
-    default : break;
-    case 'r':
-    // GCC Mips Constraint Letters
-    case 'd':
-    case 'y':
-      return make_vector<unsigned>(Mips::T0, Mips::T1, Mips::T2, Mips::T3,
-             Mips::T4, Mips::T5, Mips::T6, Mips::T7, Mips::S0, Mips::S1,
-             Mips::S2, Mips::S3, Mips::S4, Mips::S5, Mips::S6, Mips::S7,
-             Mips::T8, 0);
-
-    case 'f':
-      if (VT == MVT::f32) {
-        if (Subtarget->isSingleFloat())
-          return make_vector<unsigned>(Mips::F2, Mips::F3, Mips::F4, Mips::F5,
-                 Mips::F6, Mips::F7, Mips::F8, Mips::F9, Mips::F10, Mips::F11,
-                 Mips::F20, Mips::F21, Mips::F22, Mips::F23, Mips::F24,
-                 Mips::F25, Mips::F26, Mips::F27, Mips::F28, Mips::F29,
-                 Mips::F30, Mips::F31, 0);
-        else
-          return make_vector<unsigned>(Mips::F2, Mips::F4, Mips::F6, Mips::F8,
-                 Mips::F10, Mips::F20, Mips::F22, Mips::F24, Mips::F26,
-                 Mips::F28, Mips::F30, 0);
-      }
-
-      if (VT == MVT::f64)
-        if ((!Subtarget->isSingleFloat()) && (!Subtarget->isFP64bit()))
-          return make_vector<unsigned>(Mips::D1, Mips::D2, Mips::D3, Mips::D4,
-                 Mips::D5, Mips::D10, Mips::D11, Mips::D12, Mips::D13,
-                 Mips::D14, Mips::D15, 0);
-  }
-  return std::vector<unsigned>();
 }
 
 bool
