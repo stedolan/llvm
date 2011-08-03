@@ -283,6 +283,11 @@ namespace llvm {
       // WIN_ALLOCA - Windows's _chkstk call to do stack probing.
       WIN_ALLOCA,
 
+      // SEG_ALLOCA - For allocating variable amounts of stack space when using
+      // segmented stacks. Check if the current stacklet has enough space, and
+      // defects to heap allocation if not.
+      SEG_ALLOCA,
+
       // Memory barrier
       MEMBARRIER,
       MFENCE,
@@ -935,6 +940,10 @@ namespace llvm {
 
     MachineBasicBlock *EmitLoweredWinAlloca(MachineInstr *MI,
                                               MachineBasicBlock *BB) const;
+
+    MachineBasicBlock *EmitLoweredSegAlloca(MachineInstr *MI,
+                                            MachineBasicBlock *BB,
+                                            bool Is64Bit) const;
 
     MachineBasicBlock *EmitLoweredTLSCall(MachineInstr *MI,
                                           MachineBasicBlock *BB) const;

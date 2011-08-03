@@ -28,6 +28,7 @@ add_llvm_library(LLVMCore
   PassManager.cpp
   PassRegistry.cpp
   PrintModulePass.cpp
+  StackSegmenter.cpp
   Type.cpp
   Use.cpp
   User.cpp

@@ -15,6 +15,7 @@
 #include "X86InstrBuilder.h"
 #include "X86InstrInfo.h"
 #include "X86MachineFunctionInfo.h"
+#include "X86Subtarget.h"
 #include "X86TargetMachine.h"
 #include "llvm/Function.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
@@ -397,7 +398,8 @@ void X86FrameLowering::emitPrologue(MachineFunction &MF) const {
       !RegInfo->needsStackRealignment(MF) &&
       !MFI->hasVarSizedObjects() &&                // No dynamic alloca.
       !MFI->adjustsStack() &&                      // No calls.
-      !IsWin64) {                                  // Win64 has no Red Zone
+      !IsWin64 &&                                  // Win64 has no Red Zone
+      !EnableSegmentedStacks) {                    // Regular stack
     uint64_t MinSize = X86FI->getCalleeSavedFrameSize();
     if (HasFP) MinSize += SlotSize;
     StackSize = std::max(MinSize, StackSize > 128 ? StackSize - 128 : 0);
@@ -1022,4 +1024,102 @@ X86FrameLowering::processFunctionBeforeCalleeSavedScan(MachineFunction &MF,
            "Slot for EBP register must be last in order to be found!");
     FrameIdx = 0;
   }
+}
+
+void
+X86FrameLowering::adjustForSegmentedStacks(MachineFunction &MF) const {
+  MachineBasicBlock &prologueMBB = MF.front();
+  MachineFrameInfo *MFI = MF.getFrameInfo();
+  const X86InstrInfo &TII = *TM.getInstrInfo();
+  uint64_t StackSize;
+  bool Is64Bit = STI.is64Bit();
+  unsigned TlsReg, TlsOffset;
+  DebugLoc DL;
+  const X86Subtarget *ST = &MF.getTarget().getSubtarget<X86Subtarget>();
+
+  unsigned ScratchReg = Is64Bit ? X86::R10 : X86::EAX;
+  assert(!MF.getRegInfo().isLiveIn(ScratchReg) &&
+         "Scratch register is live-in");
+
+  if (MF.getFunction()->isVarArg())
+    report_fatal_error("Segmented stacks do not support vararg functions.");
+  if (!ST->isTargetLinux())
+    report_fatal_error("Segmented stacks supported only on linux.");
+
+  MachineBasicBlock *allocMBB = MF.CreateMachineBasicBlock();
+  MachineBasicBlock *checkMBB = MF.CreateMachineBasicBlock();
+  X86MachineFunctionInfo *X86FI = MF.getInfo<X86MachineFunctionInfo>();
+
+  for (MachineBasicBlock::livein_iterator i = prologueMBB.livein_begin(),
+         e = prologueMBB.livein_end(); i != e; i++) {
+    allocMBB->addLiveIn(*i);
+    checkMBB->addLiveIn(*i);
+  }
+
+  MF.push_front(allocMBB);
+  MF.push_front(checkMBB);
+
+  // Eventually StackSize will be calculated by a link-time pass; which will
+  // also decide whether checking code needs to be injected into this particular
+  // prologue.
+  StackSize = MFI->getStackSize();
+
+  // Read the limit off the current stacklet off the stack_guard location.
+  if (Is64Bit) {
+    TlsReg = X86::FS;
+    TlsOffset = 0x70;
+
+    BuildMI(checkMBB, DL, TII.get(X86::LEA64r), ScratchReg).addReg(X86::RSP)
+      .addImm(0).addReg(0).addImm(-StackSize).addReg(0);
+    BuildMI(checkMBB, DL, TII.get(X86::CMP64rm)).addReg(ScratchReg)
+      .addReg(0).addImm(0).addReg(0).addImm(TlsOffset).addReg(TlsReg);
+  } else {
+    TlsReg = X86::GS;
+    TlsOffset = 0x30;
+
+    BuildMI(checkMBB, DL, TII.get(X86::LEA32r), ScratchReg).addReg(X86::ESP)
+      .addImm(0).addReg(0).addImm(-StackSize).addReg(0);
+    BuildMI(checkMBB, DL, TII.get(X86::CMP32rm)).addReg(ScratchReg)
+      .addReg(0).addImm(0).addReg(0).addImm(TlsOffset).addReg(TlsReg);
+  }
+
+  // This jump is taken if SP >= (Stacklet Limit + Stack Space required).
+  // It jumps to normal execution of the function body.
+  BuildMI(checkMBB, DL, TII.get(X86::JG_4)).addMBB(&prologueMBB);
+
+  // On 32 bit we first push the arguments size and then the frame size. On 64
+  // bit, we pass the stack frame size in r10 and the argument size in r11.
+  if (Is64Bit) {
+    BuildMI(allocMBB, DL, TII.get(X86::MOV64ri), X86::R10)
+      .addImm(StackSize);
+    BuildMI(allocMBB, DL, TII.get(X86::MOV64ri), X86::R11)
+      .addImm(X86FI->getArgumentStackSize());
+    MF.getRegInfo().setPhysRegUsed(X86::R10);
+    MF.getRegInfo().setPhysRegUsed(X86::R11);
+  } else {
+    BuildMI(allocMBB, DL, TII.get(X86::ADD32ri), X86::ESP).addReg(X86::ESP)
+      .addImm(8);
+    BuildMI(allocMBB, DL, TII.get(X86::PUSHi32))
+      .addImm(X86FI->getArgumentStackSize());
+    BuildMI(allocMBB, DL, TII.get(X86::PUSHi32))
+      .addImm(StackSize);
+  }
+
+  // __morestack is in libgcc
+  BuildMI(allocMBB, DL, TII.get(X86::CALL64pcrel32))
+    .addExternalSymbol("__morestack");
+
+  if (!Is64Bit)
+    BuildMI(allocMBB, DL, TII.get(X86::SUB32ri), X86::ESP).addReg(X86::ESP)
+      .addImm(16);
+  
+  BuildMI(allocMBB, DL, TII.get(X86::RET));
+
+  allocMBB->addSuccessor(&prologueMBB);
+  checkMBB->addSuccessor(allocMBB);
+  checkMBB->addSuccessor(&prologueMBB);
+
+#ifndef NDEBUG
+  MF.verify();
+#endif
 }
