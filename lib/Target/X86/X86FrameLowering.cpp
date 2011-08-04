@@ -1062,7 +1062,7 @@ X86FrameLowering::adjustForSegmentedStacks(MachineFunction &MF) const {
   // Eventually StackSize will be calculated by a link-time pass; which will
   // also decide whether checking code needs to be injected into this particular
   // prologue.
-  StackSize = MFI->getStackSize();
+  StackSize = MFI->getStackSize() + MFI->getSwapStackContSize();
 
   // Read the limit off the current stacklet off the stack_guard location.
   if (Is64Bit) {

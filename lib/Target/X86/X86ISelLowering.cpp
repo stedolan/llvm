@@ -11075,27 +11075,54 @@ X86TargetLowering::EmitLoweredSwapStack(MachineInstr *MI,
   sinkMBB->transferSuccessorsAndUpdatePHIs(BB);
   BB->addSuccessor(sinkMBB);
 
-
-
   // Create the 1-element jump table
   unsigned JTEncoding = getJumpTableEncoding(); //FIXME: maybe different encoding?
   std::vector<MachineBasicBlock*> jumpDestBBs;
   jumpDestBBs.push_back(sinkMBB);
   unsigned JTI = F->getOrCreateJumpTableInfo(JTEncoding)
                   ->createJumpTableIndex(jumpDestBBs);
-
+  unsigned SizeOfPointer = TD->getPointerSize();
+  unsigned StackSpace;
 
 
 
 
   if (Is64Bit) {
+    StackSpace = SizeOfPointer; // return addr and 
+    if (EnableSegmentedStacks) {
+      // We need to save/restore the segmented-stacks TLS variable
+      // FIXME FIXME FIXME: put this somewhere less stupid
+      // currently this is duped in X86FrameLowering.cpp
+      StackSpace += SizeOfPointer;
+      int TlsReg = X86::FS;
+      int TlsOffset = 0x70;
+      {
+        unsigned reg = F->getRegInfo()
+          .createVirtualRegister(X86::GR64RegisterClass);
+        BuildMI(BB, DL, TII->get(X86::MOV64rm), reg)
+          .addReg(0).addImm(0).addReg(0).addImm(TlsOffset).addReg(TlsReg);
+        BuildMI(BB, DL, TII->get(X86::PUSH64r))
+          .addReg(reg);
+      }
+      {
+        unsigned reg = F->getRegInfo()
+          .createVirtualRegister(X86::GR64RegisterClass);
+        BuildMI(*sinkMBB, sinkMBB->begin(), DL, TII->get(X86::MOV64mr))
+          .addReg(0).addImm(0).addReg(0).addImm(TlsOffset).addReg(TlsReg)
+          .addReg(reg);
+        BuildMI(*sinkMBB, sinkMBB->begin(), DL, TII->get(X86::POP64r))
+          .addReg(reg, RegState::Define);
+      }
+    }
     if (HasFramePointer) {
+      StackSpace += SizeOfPointer;
       BuildMI(BB, DL, TII->get(X86::PUSH64r))
         .addReg(X86::RBP);
       BuildMI(*sinkMBB, sinkMBB->begin(), DL, TII->get(X86::POP64r))
         .addReg(X86::RBP, RegState::Define);
     }
     if (HasMemRet) {
+      StackSpace += SizeOfPointer;
       BuildMI(BB, DL, TII->get(X86::PUSH64r))
         .addReg(MI->getOperand(2).getReg());
       // just pop off the memret pointer, we don't need it any more
@@ -11162,6 +11189,9 @@ X86TargetLowering::EmitLoweredSwapStack(MachineInstr *MI,
   } else {
     llvm_unreachable(0);
   }
+  
+  if (StackSpace > MFI->getSwapStackContSize())
+    MFI->setSwapStackContSize(StackSpace);
 
   // Mark the registers used for return values as live-in
   typedef DenseSet<unsigned> RegSet;

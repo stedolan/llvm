@@ -182,6 +182,13 @@ class MachineFrameInfo {
   ///
   unsigned MaxCallFrameSize;
 
+  /// SwapStackContSize - This contains the size of the continuation
+  /// which may be pushed to the stack if a SWAPSTACK operation is
+  /// executed. It is 0 if the function does not use SWAPSTACK,
+  /// otherwise it's a target-specific amount (the size of a couple of
+  /// pointers).
+  unsigned SwapStackContSize;
+
   /// CSInfo - The prolog/epilog code inserter fills in this vector with each
   /// callee saved register saved in the frame.  Beyond its use by the prolog/
   /// epilog code inserter, this data used for debug info and exception
@@ -221,6 +228,7 @@ public:
     HasCalls = false;
     StackProtectorIdx = -1;
     MaxCallFrameSize = 0;
+    SwapStackContSize = 0;
     CSIValid = false;
     LocalFrameSize = 0;
     LocalFrameMaxAlign = 0;
@@ -427,6 +435,11 @@ public:
   ///
   unsigned getMaxCallFrameSize() const { return MaxCallFrameSize; }
   void setMaxCallFrameSize(unsigned S) { MaxCallFrameSize = S; }
+
+  /// getSwapStackContSize - Return the number of bytes of extra stack space which
+  /// may be used by a SWAPSTACK instruction.
+  unsigned getSwapStackContSize() const { return SwapStackContSize; }
+  void setSwapStackContSize(unsigned S) { SwapStackContSize = S; }
 
   /// CreateFixedObject - Create a new object at a fixed location on the stack.
   /// All fixed objects should be created before other objects are created for
