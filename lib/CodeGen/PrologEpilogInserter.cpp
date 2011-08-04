@@ -218,6 +218,10 @@ void PEI::calculateCalleeSavedRegisters(MachineFunction &Fn) {
   if (Fn.getFunction()->hasFnAttr(Attribute::Naked))
     return;
 
+  // In nocalleesave functions we don't need to save any registers
+  if (MFI->getOmitCalleeSaveRegisters())
+    return;
+
   std::vector<CalleeSavedInfo> CSI;
   for (unsigned i = 0; CSRegs[i]; ++i) {
     unsigned Reg = CSRegs[i];

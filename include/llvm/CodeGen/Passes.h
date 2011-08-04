@@ -90,6 +90,10 @@ namespace llvm {
   /// machine basic blocks.
   extern char &UnreachableMachineBlockElimID;
 
+  /// CalleeSaveRemover pass - changes ABI of annotated functions to remove
+  /// callee-save registers
+  extern char &CalleeSaveRemoverID;
+
   /// DeadMachineInstructionElim pass - This pass removes dead machine
   /// instructions.
   ///
@@ -233,6 +237,10 @@ namespace llvm {
   /// createExpandISelPseudosPass - This pass expands pseudo-instructions.
   ///
   FunctionPass *createExpandISelPseudosPass();
+
+  /// createCalleeSaveRemoverPass - This pass changes the ABI of annotated
+  /// functions to avoid having any callee-save registers.
+  FunctionPass *createCalleeSaveRemoverPass();
 
 } // End llvm namespace
 

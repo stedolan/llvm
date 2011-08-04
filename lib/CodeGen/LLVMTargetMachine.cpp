@@ -68,6 +68,8 @@ static cl::opt<bool> DisableLSR("disable-lsr", cl::Hidden,
     cl::desc("Disable Loop Strength Reduction Pass"));
 static cl::opt<bool> DisableCGP("disable-cgp", cl::Hidden,
     cl::desc("Disable Codegen Prepare"));
+static cl::opt<bool> DisableCalleeSaveRemoval("disable-callee-save-removal", cl::Hidden,
+    cl::desc("Disable removal of callee-save registers on functions with nocalleesave attribute"));
 static cl::opt<bool> PrintLSR("print-lsr-output", cl::Hidden,
     cl::desc("Print LLVM IR produced by the loop-reduce pass"));
 static cl::opt<bool> PrintISelInput("print-isel-input", cl::Hidden,
@@ -400,6 +402,9 @@ bool LLVMTargetMachine::addCommonCodeGenPasses(PassManagerBase &PM,
     // arguments directly (see t11 in test/CodeGen/X86/sibcall.ll).
     PM.add(createDeadMachineInstructionElimPass());
     printAndVerify(PM, "After codegen DCE pass");
+
+    if (!DisableCalleeSaveRemoval)
+      PM.add(createCalleeSaveRemoverPass());
 
     if (!DisableMachineLICM)
       PM.add(createMachineLICMPass());

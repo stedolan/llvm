@@ -4,6 +4,7 @@ add_llvm_library(LLVMCodeGen
   Analysis.cpp
   BranchFolding.cpp
   CalcSpillWeights.cpp
+  CalleeSaveRemover.cpp
   CallingConvLower.cpp
   CodeGen.cpp
   CodePlacementOpt.cpp

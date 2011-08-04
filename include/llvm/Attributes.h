@@ -72,6 +72,8 @@ const Attributes UWTable     = 1<<30;     ///< Function must be in a unwind
 const Attributes NonLazyBind = 1U<<31;    ///< Function is called early and/or
                                           ///  often, so lazy binding isn't
                                           ///  worthwhile.
+const Attributes NoCalleeSave = 1ull<<32; ///< Function need not preserve the
+                                          ///  callee-save registers.
 
 // const Attributes MAXATTRIB = 1ULL<<52
 // Due to intricacies of the bitcode format (see BitcodeWriter.cpp), attribute
@@ -97,7 +99,7 @@ const Attributes ParameterOnly = ByVal | Nest | StructRet | NoCapture;
 const Attributes FunctionOnly = NoReturn | NoUnwind | ReadNone | ReadOnly |
   NoInline | AlwaysInline | OptimizeForSize | StackProtect | StackProtectReq |
   NoRedZone | NoImplicitFloat | Naked | InlineHint | StackAlignment |
-  Hotpatch | UWTable | NonLazyBind;
+  Hotpatch | UWTable | NonLazyBind | NoCalleeSave;
 
 /// @brief Parameter attributes that do not apply to vararg call arguments.
 const Attributes VarArgsIncompatible = StructRet;

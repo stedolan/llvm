@@ -20,6 +20,7 @@ using namespace llvm;
 /// initializeCodeGen - Initialize all passes linked into the CodeGen library.
 void llvm::initializeCodeGen(PassRegistry &Registry) {
   initializeCalculateSpillWeightsPass(Registry);
+  initializeCalleeSaveRemoverPass(Registry);
   initializeDeadMachineInstructionElimPass(Registry);
   initializeGCModuleInfoPass(Registry);
   initializeIfConverterPass(Registry);

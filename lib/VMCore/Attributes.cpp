@@ -76,6 +76,8 @@ std::string Attribute::getAsString(Attributes Attrs) {
     Result += "hotpatch ";
   if (Attrs & Attribute::NonLazyBind)
     Result += "nonlazybind ";
+  if (Attrs & Attribute::NoCalleeSave)
+    Result += "nocalleesave ";
   if (Attrs & Attribute::StackAlignment) {
     Result += "alignstack(";
     Result += utostr(Attribute::getStackAlignmentFromAttrs(Attrs));

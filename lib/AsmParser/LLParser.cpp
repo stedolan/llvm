@@ -921,6 +921,7 @@ bool LLParser::ParseOptionalAttrs(Attributes &Attrs, unsigned AttrKind) {
     case lltok::kw_naked:           Attrs |= Attribute::Naked; break;
     case lltok::kw_hotpatch:        Attrs |= Attribute::Hotpatch; break;
     case lltok::kw_nonlazybind:     Attrs |= Attribute::NonLazyBind; break;
+    case lltok::kw_nocalleesave:    Attrs |= Attribute::NoCalleeSave; break;
 
     case lltok::kw_alignstack: {
       unsigned Alignment;

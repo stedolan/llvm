@@ -75,6 +75,7 @@ void initializeCFGPrinterPass(PassRegistry&);
 void initializeCFGSimplifyPassPass(PassRegistry&);
 void initializeCFGViewerPass(PassRegistry&);
 void initializeCalculateSpillWeightsPass(PassRegistry&);
+void initializeCalleeSaveRemoverPass(PassRegistry&);
 void initializeCallGraphAnalysisGroup(PassRegistry&);
 void initializeCodeGenPreparePass(PassRegistry&);
 void initializeConstantMergePass(PassRegistry&);

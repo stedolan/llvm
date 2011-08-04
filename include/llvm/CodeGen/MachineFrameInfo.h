@@ -189,6 +189,10 @@ class MachineFrameInfo {
   /// pointers).
   unsigned SwapStackContSize;
 
+  /// OmitCalleeSaveRegisters - If this is set, the registers which are normally
+  /// callee-save will not be preserved by this function.
+  bool OmitCalleeSaveRegisters;
+
   /// CSInfo - The prolog/epilog code inserter fills in this vector with each
   /// callee saved register saved in the frame.  Beyond its use by the prolog/
   /// epilog code inserter, this data used for debug info and exception
@@ -229,6 +233,7 @@ public:
     StackProtectorIdx = -1;
     MaxCallFrameSize = 0;
     SwapStackContSize = 0;
+    OmitCalleeSaveRegisters = false;
     CSIValid = false;
     LocalFrameSize = 0;
     LocalFrameMaxAlign = 0;
@@ -440,6 +445,11 @@ public:
   /// may be used by a SWAPSTACK instruction.
   unsigned getSwapStackContSize() const { return SwapStackContSize; }
   void setSwapStackContSize(unsigned S) { SwapStackContSize = S; }
+
+  /// getOmitCalleeSaveRegisters - Returns true if this function won't preserve
+  /// the normal callee-save registers.
+  bool getOmitCalleeSaveRegisters() const { return OmitCalleeSaveRegisters; }
+  void setOmitCalleeSaveRegisters(bool O) { OmitCalleeSaveRegisters = O; }
 
   /// CreateFixedObject - Create a new object at a fixed location on the stack.
   /// All fixed objects should be created before other objects are created for
