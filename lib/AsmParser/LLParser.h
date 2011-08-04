@@ -170,7 +170,7 @@ namespace llvm {
       return ParseUInt32(Val);
     }
     bool ParseOptionalAddrSpace(unsigned &AddrSpace);
-    bool ParseOptionalAttrs(unsigned &Attrs, unsigned AttrKind);
+    bool ParseOptionalAttrs(Attributes &Attrs, unsigned AttrKind);
     bool ParseOptionalLinkage(unsigned &Linkage, bool &HasLinkage);
     bool ParseOptionalLinkage(unsigned &Linkage) {
       bool HasLinkage; return ParseOptionalLinkage(Linkage, HasLinkage);
@@ -301,8 +301,8 @@ namespace llvm {
     struct ParamInfo {
       LocTy Loc;
       Value *V;
-      unsigned Attrs;
-      ParamInfo(LocTy loc, Value *v, unsigned attrs)
+      Attributes Attrs;
+      ParamInfo(LocTy loc, Value *v, Attributes attrs)
         : Loc(loc), V(v), Attrs(attrs) {}
     };
     bool ParseParameterList(SmallVectorImpl<ParamInfo> &ArgList,
@@ -322,9 +322,9 @@ namespace llvm {
     struct ArgInfo {
       LocTy Loc;
       Type *Ty;
-      unsigned Attrs;
+      Attributes Attrs;
       std::string Name;
-      ArgInfo(LocTy L, Type *ty, unsigned Attr, const std::string &N)
+      ArgInfo(LocTy L, Type *ty, Attributes Attr, const std::string &N)
         : Loc(L), Ty(ty), Attrs(Attr), Name(N) {}
     };
     bool ParseArgumentList(SmallVectorImpl<ArgInfo> &ArgList, bool &isVarArg);

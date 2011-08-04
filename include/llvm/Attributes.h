@@ -23,7 +23,7 @@ namespace llvm {
 class Type;
 
 /// Attributes - A bitset of attributes.
-typedef unsigned Attributes;
+typedef uint64_t Attributes;
 
 namespace Attribute {
 
@@ -72,6 +72,10 @@ const Attributes UWTable     = 1<<30;     ///< Function must be in a unwind
 const Attributes NonLazyBind = 1U<<31;    ///< Function is called early and/or
                                           ///  often, so lazy binding isn't
                                           ///  worthwhile.
+
+// const Attributes MAXATTRIB = 1ULL<<52
+// Due to intricacies of the bitcode format (see BitcodeWriter.cpp), attribute
+// bits past bit 52 can't be represented.
 
 /// Note that uwtable is about the ABI or the user mandating an entry in the
 /// unwind table. The nounwind attribute is about an exception passing by the
