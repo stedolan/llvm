@@ -11037,6 +11037,8 @@ X86TargetLowering::EmitLoweredSwapStack(MachineInstr *MI,
   DebugLoc DL = MI->getDebugLoc();
   bool Is64Bit = Subtarget->is64Bit();
   MachineFunction* F = BB->getParent();
+  MachineFrameInfo* MFI = F->getFrameInfo(); 
+  const TargetRegisterInfo* TRI = F->getTarget().getRegisterInfo();
 
   const TargetFrameLowering* TFI = F->getTarget().getFrameLowering();
   bool HasFramePointer = TFI->hasFP(*F);
@@ -11137,8 +11139,9 @@ X86TargetLowering::EmitLoweredSwapStack(MachineInstr *MI,
     BuildMI(BB, DL, TII->get(X86::PUSH64r))
       .addReg(retaddr);
 
-    BuildMI(BB, DL, TII->get(X86::XCHG64ar))
-      .addReg(X86::RSP, RegState::Define);
+    BuildMI(BB, DL, TII->get(X86::XCHG64rr), X86::RSP)
+      .addReg(X86::RSP)
+      .addReg(X86::RAX);
 
     unsigned jmpaddr = F->getRegInfo().
       createVirtualRegister(X86::GR64RegisterClass);
@@ -11159,6 +11162,46 @@ X86TargetLowering::EmitLoweredSwapStack(MachineInstr *MI,
   } else {
     llvm_unreachable(0);
   }
+
+  // Mark the registers used for return values as live-in
+  typedef DenseSet<unsigned> RegSet;
+  RegSet physDef, physLiveIn;
+  for (MachineBasicBlock::iterator MII = sinkMBB->begin(), MIE = sinkMBB->end();
+       MII != MIE; ++MII){
+    for (unsigned i = 0, e = MII->getNumOperands(); i != e; ++i){
+      MachineOperand& MO = MII->getOperand(i);
+      if (MO.isReg() && MO.isUse()){
+        unsigned reg = MO.getReg();
+        if (TargetRegisterInfo::isPhysicalRegister(reg) && !physDef.count(reg)){
+          // Use of a register not defined
+          // so it must be a SwapStack result
+          if (!physLiveIn.count(reg)){
+            // not seen before
+            physLiveIn.insert(reg);
+            // stack pointer does not need to be marked live
+            // neither do segment register references
+            if (reg != X86::RSP && reg != X86::ESP && 
+                !X86::SEGMENT_REGRegClass.contains(reg))
+              sinkMBB->addLiveIn(reg);
+          }
+        }
+      }
+    }
+    for (unsigned i = 0, e = MII->getNumOperands(); i != e; ++i){
+      MachineOperand& MO = MII->getOperand(i);
+      if (MO.isReg() && MO.isDef()){
+        unsigned reg = MO.getReg();
+        if (TargetRegisterInfo::isPhysicalRegister(reg)){
+          for (const unsigned* SubRegs = TRI->getSubRegisters(reg);
+               unsigned SubReg = *SubRegs; ++SubRegs){
+            physDef.insert(SubReg);
+          }
+          physDef.insert(reg);
+        }
+      }
+    }
+  }
+  
 
   MI->eraseFromParent();   // The pseudo instruction is gone now.
   return sinkMBB;
