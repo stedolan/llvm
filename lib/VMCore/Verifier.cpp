@@ -1139,6 +1139,16 @@ void Verifier::VerifyCallSite(CallSite CS) {
               "Function has metadata parameter but isn't an intrinsic", I);
   }
 
+  if (CS.getCallingConv() == CallingConv::SwapStack) {
+    Assert1(dyn_cast<CallInst>(I),
+            "SwapStack calls must use \"call\", not \"invoke\"", I);
+    Assert1(CS.getCalledFunction() == 0,
+            "SwapStack calls must be to a function pointer "
+            "obtained via llvm.newstack", I);
+    Assert1(!FTy->isVarArg(),
+            "SwapStack calls may not use varargs", I);
+  }
+
   visitInstruction(*I);
 }
 
