@@ -154,8 +154,10 @@ public:
   }
   static void Profile(FoldingSetNodeID &ID, const AttributeWithIndex *Attr,
                       unsigned NumAttrs) {
-    for (unsigned i = 0; i != NumAttrs; ++i)
-      ID.AddInteger(uint64_t(Attr[i].Attrs) << 32 | unsigned(Attr[i].Index));
+    for (unsigned i = 0; i != NumAttrs; ++i) {
+      ID.AddInteger(Attr[i].Attrs);
+      ID.AddInteger(Attr[i].Index);
+    }
   }
 };
 }
