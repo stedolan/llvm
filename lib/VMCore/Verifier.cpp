@@ -641,6 +641,10 @@ void Verifier::visitFunction(Function &F) {
   // Check function attributes.
   VerifyFunctionAttrs(FT, Attrs, &F);
 
+  // Check that the address of nocalleesave funtions isn't taken
+  if (F.hasFnAttr(Attribute::NoCalleeSave)) 
+    Assert1(!F.hasAddressTaken(), "Cannot take the address of a nocalleesave function", &F);
+
   // Check that this function meets the restrictions on this calling convention.
   switch (F.getCallingConv()) {
   default:

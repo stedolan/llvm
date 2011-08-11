@@ -46,8 +46,6 @@ static bool shouldOmitCalleeSave(const GlobalValue* GV){
     return false; // not an LLVM function
   if (!F->hasFnAttr(Attribute::NoCalleeSave))
     return false; // not marked nocalleesave
-  if (F->hasAddressTaken() || !F->hasLocalLinkage())
-    return false; // can't safely change ABI of this function
 
   return true;
 }
