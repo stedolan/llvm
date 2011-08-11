@@ -221,6 +221,7 @@ void initializeStripDebugDeclarePass(PassRegistry&);
 void initializeStripNonDebugSymbolsPass(PassRegistry&);
 void initializeStripSymbolsPass(PassRegistry&);
 void initializeStrongPHIEliminationPass(PassRegistry&);
+void initializeSwapStackCalleeSaveRemoverPass(PassRegistry&);
 void initializeTailCallElimPass(PassRegistry&);
 void initializeTailDupPass(PassRegistry&);
 void initializeTargetDataPass(PassRegistry&);

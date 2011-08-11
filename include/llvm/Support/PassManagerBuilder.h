@@ -192,7 +192,10 @@ public:
       MPM.add(createFunctionAttrsPass());       // Set readonly/readnone attrs
     if (OptLevel > 2)
       MPM.add(createArgumentPromotionPass());   // Scalarize uninlined fn args
-    
+    if (OptLevel > 1)
+      // Elide unnecessary register preservation
+      MPM.add(createSwapStackCalleeSaveRemoverPass()); 
+
     // Start of function pass.
     // Break up aggregate allocas, using SSAUpdater.
     MPM.add(createScalarReplAggregatesPass(-1, false));

@@ -152,6 +152,7 @@ namespace {
       (void) llvm::createCorrelatedValuePropagationPass();
       (void) llvm::createMemDepPrinter();
       (void) llvm::createInstructionSimplifierPass();
+      (void) llvm::createSwapStackCalleeSaveRemoverPass();
 
       (void)new llvm::IntervalPartition();
       (void)new llvm::FindUsedTypes();

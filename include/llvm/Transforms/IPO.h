@@ -199,6 +199,11 @@ ModulePass *createMergeFunctionsPass();
 ///
 ModulePass *createPartialInliningPass();
 
+//===----------------------------------------------------------------------===//
+/// createSwapStackCalleeSaveRemoverPass - This removes callee-save regs.
+///
+Pass *createSwapStackCalleeSaveRemoverPass();
+
 } // End llvm namespace
 
 #endif

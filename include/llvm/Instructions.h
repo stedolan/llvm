@@ -1021,6 +1021,12 @@ public:
   const Value *getCalledValue() const { return Op<-1>(); }
         Value *getCalledValue()       { return Op<-1>(); }
 
+  /// getCalledUse - Get the Use representing the funtion invoked by this
+  /// instruction. Useful for determining whether a given use of a value
+  /// used by a CallInst is as a callee or as a parameter.
+  const Use &getCalledUse() const { return Op<-1>(); }
+        Use &getCalledUse()       { return Op<-1>(); }
+
   /// setCalledFunction - Set the function called.
   void setCalledFunction(Value* Fn) {
     Op<-1>() = Fn;

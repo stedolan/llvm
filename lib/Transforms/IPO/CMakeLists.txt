@@ -19,4 +19,5 @@ add_llvm_library(LLVMipo
   PruneEH.cpp
   StripDeadPrototypes.cpp
   StripSymbols.cpp
+  SwapStackCalleeSaveRemover.cpp
   )
