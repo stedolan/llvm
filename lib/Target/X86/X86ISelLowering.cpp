@@ -11155,6 +11155,7 @@ X86TargetLowering::EmitLoweredSwapStack(MachineInstr *MI,
 
 
 
+    /*
     // We load the callee into RAX here
     // This allows us to use the XCHG instruction to swap it into
     // RSP, and also prevents the insertion of spill code after
@@ -11162,13 +11163,26 @@ X86TargetLowering::EmitLoweredSwapStack(MachineInstr *MI,
     // spilled)
     BuildMI(BB, DL, TII->get(TargetOpcode::COPY), X86::RAX)
       .addReg(callee);
-
+    
     BuildMI(BB, DL, TII->get(X86::PUSH64r))
       .addReg(retaddr);
 
     BuildMI(BB, DL, TII->get(X86::XCHG64rr), X86::RSP)
       .addReg(X86::RSP)
       .addReg(X86::RAX);
+    */
+
+    // quick hack, do better later
+    BuildMI(BB, DL, TII->get(TargetOpcode::COPY), X86::R10)
+      .addReg(callee);
+    BuildMI(BB, DL, TII->get(X86::PUSH64r))
+      .addReg(retaddr);
+    BuildMI(BB, DL, TII->get(TargetOpcode::COPY), X86::RAX)
+      .addReg(X86::RSP);
+    BuildMI(BB, DL, TII->get(TargetOpcode::COPY), X86::RSP)
+      .addReg(X86::R10);
+    
+    
 
     unsigned jmpaddr = F->getRegInfo().
       createVirtualRegister(X86::GR64RegisterClass);
