@@ -144,15 +144,25 @@ let isCall = 1, isCodeGenOnly = 1 in {
     // Mark RSP as use to prevent stack-pointer assignments appearing dead
     // (see call instructions in X86InstrControl.td) 
     Uses = [RSP] in {
-    let usesCustomInserter = 1 in
-    def SWAPSTACK64 : I<0, Pseudo, (outs), (ins GR64:$dst, variable_ops), 
-                        "# SWAPSTACK", [(X86SwapStack GR64:$dst)]>;
-    // The actual jump is performed by a SWAPSTACKJMP64r instruction
+    let usesCustomInserter = 1 in {
+      def SWAPSTACK64r       : I<0, Pseudo, (outs), 
+                                 (ins GR64:$stk, variable_ops), 
+                                 "# SWAPSTACK", [(X86SwapStack GR64:$stk)]>;
+      def SWAPSTACK64pcrel32 : I<0, Pseudo, (outs), 
+                                 (ins GR64:$stk, i64i32imm_pcrel:$dst, variable_ops), 
+                                 "# SWAPSTACK", []>;
+    }
+    // The actual jump is performed by a SWAPSTACKJMP64 instruction
     // which is just a jump, but takes the call arguments as parameters
     // so that they are marked as live.
-    let isTerminator = 1, isBarrier = 1 in 
-    def SWAPSTACKJMP64r : I<0xFF, MRM4r, (outs), (ins GR64:$dst, variable_ops),
-                            "jmp{q}\t{*}$dst  # SWAPSTACK", []>;
+    let isTerminator = 1, isBarrier = 1 in {
+      def SWAPSTACKJMP64r       : I<0xFF, MRM4r, (outs), 
+                                    (ins GR64:$dst, variable_ops),
+                                    "jmp{q}\t{*}$dst  # SWAPSTACK", []>;
+      def SWAPSTACKJMP64pcrel32 : Ii32PCRel<0xE9, RawFrm, (outs), 
+                                    (ins i64i32imm_pcrel:$dst, variable_ops),
+                                   "jmp\t$dst  # SWAPSTACK", []>;
+    }
   }
 }
 
@@ -964,6 +974,11 @@ def : Pat<(X86tcret (i64 tglobaladdr:$dst), imm:$off),
 def : Pat<(X86tcret (i64 texternalsym:$dst), imm:$off),
           (TCRETURNdi64 texternalsym:$dst, imm:$off)>,
           Requires<[In64BitMode]>;
+
+// SwapStack calls
+def : Pat<(X86SwapStack GR64:$stk, (X86Wrapper tglobaladdr:$addr)),
+          (SWAPSTACK64pcrel32 GR64:$stk, tglobaladdr:$addr)>;
+
 
 // Normal calls, with various flavors of addresses.
 def : Pat<(X86call (i32 tglobaladdr:$dst)),

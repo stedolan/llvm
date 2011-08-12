@@ -1989,6 +1989,8 @@ X86TargetLowering::LowerCall(SDValue Chain, SDValue Callee,
 
   assert(!(isVarArg && !IsVarArgConvention(CallConv)) &&
          "Var args not supported with calling conventions fastcc, ghc or swapstack");
+  
+  SDValue SwapStackCalleeRetAddr;
 
   // Analyze operands of the call, assigning locations to each operand.
   SmallVector<CCValAssign, 16> ArgLocs;
@@ -2010,10 +2012,22 @@ X86TargetLowering::LowerCall(SDValue Chain, SDValue Callee,
     NumBytes = 0;
   else if (GuaranteedTailCallOpt && IsTailCallConvention(CallConv))
     NumBytes = GetAlignedArgumentStackSize(NumBytes, DAG);
-  else if (CallConv == CallingConv::SwapStack)
+  else if (CallConv == CallingConv::SwapStack){
     // Memory operands are stored somewhere on the *callee*'s stack
     // which is a different area of memory to our stack
     NumBytes = 0;
+
+    // Load the callee return-address
+    // Could be done in the custom lowering for the SWAPSTACK DAG node,
+    // but doing it here provides more optimisation opportunities and
+    // better scheduling.
+    SwapStackCalleeRetAddr = DAG.getLoad(getPointerTy(), dl, Chain,
+                                         Callee, MachinePointerInfo(),
+                                         false, false, 0);
+    Chain = SwapStackCalleeRetAddr.getValue(1);
+  }
+  
+
 
 
   int FPDiff = 0;
@@ -2354,7 +2368,9 @@ X86TargetLowering::LowerCall(SDValue Chain, SDValue Callee,
   SDValue SwapStackRetArea;
 
   if (CallConv == CallingConv::SwapStack) {
-    // Check whether there are any return values passed in memor
+    Ops.push_back(SwapStackCalleeRetAddr);
+
+    // Check whether there are any return values passed in memory
     SmallVector<CCValAssign, 16> RVLocs;
     CCState RetCCInfo(CallConv, isVarArg, MF,
                       getTargetMachine(), RVLocs, *DAG.getContext());
@@ -11043,16 +11059,29 @@ X86TargetLowering::EmitLoweredSwapStack(MachineInstr *MI,
   const TargetFrameLowering* TFI = F->getTarget().getFrameLowering();
   bool HasFramePointer = TFI->hasFP(*F);
 
-
-  assert(MI->getOpcode() == Is64Bit ? X86::SWAPSTACK64 : -1 /*FIXME*/);
-  assert(MI->getNumOperands() >= 2 &&
-         MI->getOperand(0).isReg() &&
-         MI->getOperand(1).isImm());
+  assert(MI->getNumOperands() >= 3 &&
+         MI->getOperand(2).isImm());
 
   unsigned callee = MI->getOperand(0).getReg();
-  bool HasMemRet = MI->getOperand(1).getImm() != 0;
-  assert(!HasMemRet || MI->getOperand(2).isReg());
-  int FirstRegOp = HasMemRet ? 3 : 2;
+  const MachineOperand& CalleeRetAddr = MI->getOperand(1);
+  bool HasMemRet = MI->getOperand(2).getImm() != 0;
+  if (HasMemRet) assert(MI->getOperand(3).isReg());
+  unsigned MemRet = HasMemRet ? MI->getOperand(3).getReg() : 0;
+  int FirstRegOp = HasMemRet ? 4 : 3;
+
+  int JumpOpcode;
+  switch (MI->getOpcode()){
+  case X86::SWAPSTACK64r: 
+    assert(Is64Bit); 
+    JumpOpcode = X86::SWAPSTACKJMP64r;
+    break;
+  case X86::SWAPSTACK64pcrel32:
+    assert(Is64Bit);
+    JumpOpcode = X86::SWAPSTACKJMP64pcrel32;
+    break;
+  default:
+    llvm_unreachable(0);
+  }
 
   // Code sequence to be inserted:
   //   push addrof(RET)
@@ -11124,7 +11153,7 @@ X86TargetLowering::EmitLoweredSwapStack(MachineInstr *MI,
     if (HasMemRet) {
       StackSpace += SizeOfPointer;
       BuildMI(BB, DL, TII->get(X86::PUSH64r))
-        .addReg(MI->getOperand(2).getReg());
+        .addReg(MemRet);
       // just pop off the memret pointer, we don't need it any more
       BuildMI(*sinkMBB, sinkMBB->begin(), DL, TII->get(X86::ADD64ri8), X86::RSP)
         .addReg(X86::RSP)
@@ -11183,15 +11212,29 @@ X86TargetLowering::EmitLoweredSwapStack(MachineInstr *MI,
       .addReg(X86::R10);
     
     
-
+    // FIXME: pop going nowhere, just to bump stack
     unsigned jmpaddr = F->getRegInfo().
       createVirtualRegister(X86::GR64RegisterClass);
-    BuildMI(BB, DL, TII->get(X86::POP64r), jmpaddr);
+    MachineInstrBuilder popInst =
+      BuildMI(BB, DL, TII->get(X86::POP64r), jmpaddr);
 
     MachineInstrBuilder jmp =
-      BuildMI(BB, DL, TII->get(X86::SWAPSTACKJMP64r))
-        .setMIFlags(MI->getFlags())
-        .addReg(jmpaddr);
+      BuildMI(BB, DL, TII->get(JumpOpcode))
+        .setMIFlags(MI->getFlags());
+    
+    // We have the callee ret addr from a load before the swapstack
+    // (in CalleeRetAddr), or from a pop just now (in jmpaddr)
+    // We choose CalleeRetAddr if it is not a register: in this case
+    // the load was eliminated and this was a direct jump.
+    // If it is a register, we use jmpaddr as it definitely requires
+    // no spilling.
+    if (CalleeRetAddr.isReg()){
+      jmp.addReg(jmpaddr);
+    }else{
+      jmp.addOperand(CalleeRetAddr);
+      // Mark jmpaddr as dead
+      popInst->getOperand(0).setIsDead();
+    }
 
     jmp.addReg(X86::RAX); // use of the caller stack so it's marked live
 
@@ -11248,6 +11291,7 @@ X86TargetLowering::EmitLoweredSwapStack(MachineInstr *MI,
   
 
   MI->eraseFromParent();   // The pseudo instruction is gone now.
+
   return sinkMBB;
 }
 
@@ -11289,7 +11333,8 @@ X86TargetLowering::EmitInstrWithCustomInserter(MachineInstr *MI,
   case X86::TLSCall_32:
   case X86::TLSCall_64:
     return EmitLoweredTLSCall(MI, BB);
-  case X86::SWAPSTACK64:
+  case X86::SWAPSTACK64r:
+  case X86::SWAPSTACK64pcrel32:
     return EmitLoweredSwapStack(MI, BB);
   case X86::CMOV_GR8:
   case X86::CMOV_FR32:
