@@ -558,12 +558,12 @@ def LDtoc: Pseudo<(outs G8RC:$rD), (ins tocentry:$disp, G8RC:$reg),
                   [(set G8RC:$rD,
                      (PPCtoc_entry tglobaladdr:$disp, G8RC:$reg))]>, isPPC64;
                      
-let RST = 2, DS_RA = 0 in // FIXME: Should be a pseudo.
+let RST = 2, DS_RA = 0, hasSideEffects = 1 in // FIXME: Should be a pseudo.
 def LDinto_toc: DSForm_1<58, 0, (outs), (ins G8RC:$reg),
                     "ld 2, 8($reg)", LdStLD,
                     [(PPCload_toc G8RC:$reg)]>, isPPC64;
                     
-let RST = 2, DS_RA = 0 in // FIXME: Should be a pseudo.
+let RST = 2, DS_RA = 0, hasSideEffects = 1 in // FIXME: Should be a pseudo.
 def LDtoc_restore : DSForm_1<58, 0, (outs), (ins),
                     "ld 2, 40(1)", LdStLD,
                     [(PPCtoc_restore)]>, isPPC64;
