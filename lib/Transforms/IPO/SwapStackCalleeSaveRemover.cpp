@@ -82,6 +82,10 @@ static bool usedOnlyInCallOrNewstack(Value* v){
           // used in a call to some other intrinsic
           ret = false;
         }
+      }else{
+        // used in a call, but passed as an argument
+        // thus, address is taken
+        ret = false;
       }
     }else if (CastInst* CSTI = dyn_cast<CastInst>(U.getUser())){
       // cast, check the uses of the cast
