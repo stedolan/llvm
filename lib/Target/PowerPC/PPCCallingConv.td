@@ -17,11 +17,28 @@ class CCIfSubtarget<string F, CCAction A>
  : CCIf<!strconcat("State.getTarget().getSubtarget<PPCSubtarget>().", F), A>;
 
 //===----------------------------------------------------------------------===//
+// SwapStack
+//===----------------------------------------------------------------------===//
+
+def CC_PPC_SwapStack_ExtraParam : CallingConv<[
+  CCIfType<[i32], CCAssignToReg<[R11, R3, R4, R5, R6, R7, R8, R9, R10]>>,
+//  CCIfType<[i32], CCPromoteToType<i64>>,
+  CCIfType<[i64], CCAssignToReg<[X11, X3, X4, X5, X6, X7, X8, X9, X10]>>
+]>;
+def CC_PPC_SwapStack_NoExtraParam : CallingConv<[
+  CCIfType<[i32], CCAssignToReg<[R3, R4, R5, R6, R7, R8, R9, R10]>>,
+//  CCIfType<[i32], CCPromoteToType<i64>>,
+  CCIfType<[i64], CCAssignToReg<[X3, X4, X5, X6, X7, X8, X9, X10]>>
+]>;
+
+
+//===----------------------------------------------------------------------===//
 // Return Value Calling Convention
 //===----------------------------------------------------------------------===//
 
 // Return-value convention for PowerPC
 def RetCC_PPC : CallingConv<[
+  CCIfCC<"CallingConv::SwapStack", CCDelegateTo<CC_PPC_SwapStack_ExtraParam>>,
   CCIfType<[i32], CCAssignToReg<[R3, R4, R5, R6, R7, R8, R9, R10]>>,
   CCIfType<[i64], CCAssignToReg<[X3, X4, X5, X6]>>,
   

@@ -108,6 +108,9 @@ namespace llvm {
       /// BCTRL instruction.
       BCTRL_Darwin, BCTRL_SVR4,
 
+      /// SwapStack (context switch)
+      SWAPSTACK,
+
       /// Return with a flag operand, matched by 'blr'
       RET_FLAG,
 
@@ -308,6 +311,8 @@ namespace llvm {
     MachineBasicBlock *EmitPartwordAtomicBinary(MachineInstr *MI,
                                                 MachineBasicBlock *MBB,
                                             bool is8bit, unsigned Opcode) const;
+    MachineBasicBlock *EmitSwapStack(MachineInstr *MI,
+                                     MachineBasicBlock *MBB) const;
 
     ConstraintType getConstraintType(const std::string &Constraint) const;
 
@@ -395,6 +400,8 @@ namespace llvm {
                          const PPCSubtarget &Subtarget) const;
     SDValue LowerVAARG(SDValue Op, SelectionDAG &DAG,
                        const PPCSubtarget &Subtarget) const;
+    SDValue LowerNEWSTACK(SDValue Op, SelectionDAG &DAG,
+                          const PPCSubtarget &Subtarget) const;
     SDValue LowerSTACKRESTORE(SDValue Op, SelectionDAG &DAG,
                                 const PPCSubtarget &Subtarget) const;
     SDValue LowerDYNAMIC_STACKALLOC(SDValue Op, SelectionDAG &DAG,
@@ -452,6 +459,13 @@ namespace llvm {
                   DebugLoc dl, SelectionDAG &DAG) const;
 
     SDValue
+      LowerFormalArguments_SwapStack(SDValue Chain,
+                                     CallingConv::ID CallConv, bool isVarArg,
+                                     const SmallVectorImpl<ISD::InputArg> &Ins,
+                                     DebugLoc dl, SelectionDAG &DAG,
+                                     SmallVectorImpl<SDValue> &InVals) const;
+
+    SDValue
       LowerFormalArguments_Darwin(SDValue Chain,
                                   CallingConv::ID CallConv, bool isVarArg,
                                   const SmallVectorImpl<ISD::InputArg> &Ins,
@@ -463,6 +477,14 @@ namespace llvm {
                                 const SmallVectorImpl<ISD::InputArg> &Ins,
                                 DebugLoc dl, SelectionDAG &DAG,
                                 SmallVectorImpl<SDValue> &InVals) const;
+    SDValue
+      LowerCall_SwapStack(SDValue Chain, SDValue Callee,
+                          CallingConv::ID CallConv, bool isVarArg, bool isTailCall,
+                          const SmallVectorImpl<ISD::OutputArg> &Outs,
+                          const SmallVectorImpl<SDValue> &OutVals,
+                          const SmallVectorImpl<ISD::InputArg> &Ins,
+                          DebugLoc dl, SelectionDAG &DAG,
+                          SmallVectorImpl<SDValue> &InVals) const;
 
     SDValue
       LowerCall_Darwin(SDValue Chain, SDValue Callee,

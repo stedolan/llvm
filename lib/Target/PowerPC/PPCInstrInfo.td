@@ -116,6 +116,10 @@ def PPCcall_Darwin : SDNode<"PPCISD::CALL_Darwin", SDT_PPCCall,
 def PPCcall_SVR4  : SDNode<"PPCISD::CALL_SVR4", SDT_PPCCall,
                            [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue,
                             SDNPVariadic]>;
+def SDT_PPCSwapStack : SDTypeProfile<0, -1, []>;
+def PPCSwapStack : SDNode<"PPCISD::SWAPSTACK", SDT_PPCSwapStack,
+                           [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue,
+                            SDNPVariadic]>;
 def PPCnop : SDNode<"PPCISD::NOP", SDT_PPCnop, [SDNPInGlue, SDNPOutGlue]>;
 def PPCload   : SDNode<"PPCISD::LOAD", SDTypeProfile<1, 1, []>,
                        [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
@@ -481,6 +485,31 @@ let isCall = 1, PPC970_Unit = 7,
   }
 }
 
+// Stack swapping
+let isCall = 1, isCodeGenOnly = 1 in {
+  let // All registers clobbered except for X1 (stack) and X2 (toc)
+    Defs = [X0,X2,X3,X4,X5,X6,X7,X8,X9,X10,X11,X12,X13,X14,X15,X16,
+            X17,X18,X19,X20,X21,X22,X23,X24,X25,X26,X27,X28,X29,X30,X31,
+            F0,F1,F2,F3,F4,F5,F6,F7,F8,F9,F10,F11,F12,F13,F14,F15,F16,
+            F17,F18,F19,F20,F21,F22,F23,F24,F25,F26,F27,F28,F29,F30,F31,
+            V0,V1,V2,V3,V4,V5,V6,V7,V8,V9,V10,V11,V12,V13,V14,V15,V16,
+            V17,V18,V19,V20,V21,V22,V23,V24,V25,V26,V27,V28,V29,V30,V31,
+            LR8,CTR8,
+            // We manually save CR2-CR4 since otherwise the generated spill 
+            // code is hideous.
+            CR0,CR1,CR5,CR6,CR7,CARRY],
+    Uses = [X1] in {
+    let usesCustomInserter = 1 in
+      def SWAPSTACK64 : Pseudo< (outs),
+                          (ins variable_ops),
+                          "# SWAPSTACK", [(PPCSwapStack)]>;
+    let Uses = [X1, CTR8] in
+      def BCTRL_SWAPSTACK : XLForm_2_ext<19, 528, 20, 0, 1,
+                                         (outs), (ins variable_ops),
+                                         "bctrl # SWAPSTACK", BrB,
+                                         []>, Requires<[In64BitMode]>;
+  }
+}
 
 let isCall = 1, isTerminator = 1, isReturn = 1, isBarrier = 1, Uses = [RM] in
 def TCRETURNdi :Pseudo< (outs),

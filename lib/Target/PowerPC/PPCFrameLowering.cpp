@@ -296,6 +296,24 @@ void PPCFrameLowering::emitPrologue(MachineFunction &MF) const {
 
   int LROffset = PPCFrameLowering::getReturnSaveOffset(isPPC64, isDarwinABI);
 
+  if (MF.getFunction() && 
+      MF.getFunction()->getCallingConv() == CallingConv::SwapStack){
+    assert(isPPC64 && "SwapStack unsupported on PPC32");
+    // The TOC for this function has been saved to the CR save area by newstack
+    int TocOffset = 8;
+    assert(LROffset == 16);
+    BuildMI(MBB, MBBI, dl, TII.get(PPC::LD), PPC::X2)
+      .addImm(TocOffset/4).addReg(PPC::X1);
+    // We need to save LR into the resumer's stack
+    BuildMI(MBB, MBBI, dl, TII.get(PPC::MFLR8), PPC::X0);
+    BuildMI(MBB, MBBI, dl, TII.get(PPC::STD))
+      .addReg(PPC::X0)
+      .addImm(LROffset/4).addReg(PPC::X11);
+    // There's no need to save LR otherwise since we can't return from
+    // the current function
+    MustSaveLR = false;
+  }
+
   int FPOffset = 0;
   if (HasFP) {
     if (Subtarget.isSVR4ABI()) {
