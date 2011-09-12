@@ -3023,13 +3023,15 @@ PPCTargetLowering::LowerCall(SDValue Chain, SDValue Callee,
                              const SmallVectorImpl<ISD::InputArg> &Ins,
                              DebugLoc dl, SelectionDAG &DAG,
                              SmallVectorImpl<SDValue> &InVals) const {
+  if (isTailCall)
+    isTailCall = IsEligibleForTailCallOptimization(Callee, CallConv, isVarArg,
+                                                   Ins, DAG);
+
   if (CallConv == CallingConv::SwapStack)
     return LowerCall_SwapStack(Chain, Callee, CallConv, isVarArg,
                                isTailCall, Outs, OutVals, Ins,
                                dl, DAG, InVals);
-  if (isTailCall)
-    isTailCall = IsEligibleForTailCallOptimization(Callee, CallConv, isVarArg,
-                                                   Ins, DAG);
+
 
   if (PPCSubTarget.isSVR4ABI() && !PPCSubTarget.isPPC64())
     return LowerCall_SVR4(Chain, Callee, CallConv, isVarArg,
